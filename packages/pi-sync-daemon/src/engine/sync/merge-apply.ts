@@ -21,8 +21,6 @@ import { assertUnexcludedTargets } from "../snapshot/snapshot-exclude-safety.js"
 import { assertCanonicalMutationTargets } from "../snapshot/snapshot-mutation-queues.js";
 import { sessionStorageRoot } from "../snapshot/snapshot-paths.js";
 import { snapshotBase64Size } from "../snapshot/snapshot-payload.js";
-import { recheckScopedImage, scopedTransactionImage } from "../snapshot/snapshot-transaction-images.js";
-import { ignorePolicyValidator } from "../snapshot/snapshot-transaction-policy.js";
 import type { Snapshot, SnapshotOptions } from "../snapshot/snapshot-types.js";
 import { syncDirectory } from "../state/json-file.js";
 import { syncMutationParents } from "../state/mutation-directory-sync.js";
@@ -308,12 +306,11 @@ export async function applyMergedSnapshot(
   validate: () => Promise<void>,
   protectedTarget?: string,
 ) {
-  const validateIgnore = ignorePolicyValidator(options);
   const root = agentDir();
   if (options.scope === "agent-directory" && options.sessionDir === undefined) {
     options = {
       ...options,
-      sessionDir: sessionStorageRoot(root, await agentDirectoryConfiguredSessionDir(options.signal, root, options)),
+      sessionDir: sessionStorageRoot(root, await agentDirectoryConfiguredSessionDir(options.signal, root)),
     };
     options.validateMutation?.();
     options.signal?.throwIfAborted();
@@ -349,7 +346,7 @@ export async function applyMergedSnapshot(
     new Set(Object.keys(afterHashes)),
   );
   await assertCanonicalMutationTargets(targets, options);
-  await assertUnexcludedTargets(root, targets, options);
+  if (options.scope === "agent-directory") await assertUnexcludedTargets(root, targets, options);
   // Existing case aliases share Pi's non-reentrant realpath queue. Reserve the
   // missing destination separately only after deleting its reviewed preimage.
   const targetsByQueue = new Map<string, string[]>();
@@ -377,7 +374,6 @@ export async function applyMergedSnapshot(
     const target = queueTargets[index];
     if (target) return withFileMutationQueue(target, () => acquire(index + 1));
     await validate();
-    if (validateIgnore) await validateIgnore();
     await assertCanonicalMergedTargets(root, changed, options);
     await validate();
     const current = await createSnapshot(before.profile, options);
@@ -456,7 +452,6 @@ export async function applyMergedSnapshot(
     const removedTargets = new Set([...removed].map((item) => snapshotTarget(root, item, options.sessionDir)));
     await assertCanonicalMergedTargets(root, changed, options);
     await validate();
-    if (options.validateApplyReview) await options.validateApplyReview();
     const requireReviewedHash = (relative: string, hash?: string) => {
       if (hash !== beforeHashes[relative] && hash !== afterHashes[relative])
         throw new Error("Local content changed at the apply boundary; journal retained, newer bytes untouched.");
@@ -465,20 +460,12 @@ export async function applyMergedSnapshot(
       await validate();
       const relative = relativeByTarget.get(target);
       if (!relative) throw new Error("Unowned merge target.");
-      if (validateIgnore || options.scope === "agent-directory") {
+      if (options.scope === "agent-directory") {
         await assertCanonicalMutationTargets([target], options);
         await assertUnexcludedTargets(root, [target], options);
       }
       await assertFilesystemTarget(root, relative, options, removedTargets, currentHashes);
-      if (validateIgnore) {
-        const image = await scopedTransactionImage(target, options);
-        if (image.kind === "directory" && (!removed.has(relative) || image.children.length))
-          throw new Error("Reviewed directory has remaining contents; journal retained for review.");
-        requireReviewedHash(relative, image.kind === "file" ? image.value.slice("file:".length) : undefined);
-        await validateIgnore();
-        await recheckScopedImage(target, image, options);
-        return image.kind;
-      }
+
       await validate();
       let kind: "missing" | "file" | "directory" = "missing";
       let hash: string | undefined;
@@ -524,12 +511,10 @@ export async function applyMergedSnapshot(
     for (const target of plan.deletes) {
       let kind = await revalidateTarget(target);
       try {
-        if (!validateIgnore) {
-          const stat = await fs.lstat(target);
-          await validate();
-          kind = stat.isDirectory() ? "directory" : "file";
-        }
-        if (kind !== "missing" && checkApplyImage) await requireReviewedApplyImage();
+        const stat = await fs.lstat(target);
+        await validate();
+        kind = stat.isDirectory() ? "directory" : "file";
+        if (checkApplyImage) await requireReviewedApplyImage();
         if (kind === "directory")
           await fs.rmdir(target); // Only an empty, reviewed directory may be replaced.
         else if (kind === "file") await fs.rm(target, { force: true });
@@ -557,8 +542,6 @@ export async function applyMergedSnapshot(
       // Writers registered after deletion must finish first; never accept their
       // bytes as our own, even if they match a recognizable pre/postimage.
       await requireAbsentDestinations();
-      if (deferredTargets.length && options.validateApplyReview) await options.validateApplyReview();
-      if (validateIgnore) await validateIgnore();
       await writeTargets();
     }
     await requireAbsentDestinations();
@@ -572,7 +555,7 @@ export async function applyMergedSnapshot(
         await validate();
         const relative = relativeByTarget.get(item.target);
         if (!relative) throw new Error("Unowned merge write target.");
-        if (validateIgnore) await validateIgnore();
+
         await assertFilesystemTarget(root, relative, options, new Set());
         if (checkApplyImage) await requireReviewedApplyImage();
         await fs.mkdir(path.dirname(item.target), { recursive: true });

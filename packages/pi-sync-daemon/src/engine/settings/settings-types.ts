@@ -1,6 +1,4 @@
 import type { ResolvedS3Backend, ResolvedSyncBackend } from "../backends/backend-types.js";
-import type { EffectiveIgnorePolicy, SnapshotOptions } from "../snapshot/snapshot-types.js";
-
 export type StorageConnectionType = "s3" | "git" | "webdav";
 export type OnSwitchAction = "ask-before-pull" | "pull-after-switch" | "switch-only";
 
@@ -79,6 +77,7 @@ export type SyncSetupStorageSettings =
   | WebDavSyncSetupStorageSettings;
 
 interface CommonSyncPolicySettings {
+  exclude?: string[];
   automatic: boolean;
   /** Explicit opt-in, separate from the legacy observe/shutdown policy. */
   automaticTransfer?: boolean;
@@ -98,33 +97,8 @@ interface CommonSyncPolicySettings {
 
 export type SyncPolicySettings = CommonSyncPolicySettings &
   (
-    | {
-        scope?: never;
-        pathPolicy?: never;
-        ignoreFile?: never;
-        include: string[];
-        exclude?: string[];
-        reinclude?: never;
-        sessions?: never;
-      }
-    | {
-        scope: "agent-directory";
-        pathPolicy?: never;
-        ignoreFile?: never;
-        include?: never;
-        exclude?: string[];
-        reinclude?: string[];
-        sessions?: boolean;
-      }
-    | {
-        scope: "agent-directory";
-        pathPolicy: "ignore-file";
-        ignoreFile?: string;
-        include?: never;
-        exclude?: never;
-        reinclude?: never;
-        sessions?: boolean;
-      }
+    | { scope?: never; include: string[]; reinclude?: never; sessions?: never }
+    | { scope: "agent-directory"; include?: never; reinclude?: string[]; sessions?: boolean }
   );
 
 export interface SyncSetupSettings {
@@ -153,13 +127,6 @@ export interface SyncConfig<Backend extends ResolvedSyncBackend = ResolvedS3Back
   snapshotIdentity: string;
   include: string[];
   scope?: "agent-directory";
-  pathPolicy?: "ignore-file";
-  ignoreFile?: string;
-  reservedIgnoreNames?: readonly string[];
-  ignorePolicy?: EffectiveIgnorePolicy;
-  validateIgnorePolicy?: SnapshotOptions["validateIgnorePolicy"];
-  ignoreSourceIdentity?: string;
-  configDocumentFingerprint?: string;
   exclude?: string[];
   reinclude?: string[];
   automatic: boolean;
@@ -189,8 +156,6 @@ export interface PartialConfig {
   storagePath: string;
   include: string[];
   scope?: "agent-directory";
-  pathPolicy?: "ignore-file";
-  ignoreFile?: string;
   exclude?: string[];
   reinclude?: string[];
   automatic: boolean;

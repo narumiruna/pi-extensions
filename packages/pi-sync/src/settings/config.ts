@@ -13,7 +13,6 @@ export {
   syncConfigReviewFingerprint,
   syncConfigReviewIdentity,
   syncSessionsWarnings,
-  syncSettingsConfigFingerprint,
   syncSetupReviewIdentity,
   syncSetupStorageReview,
 } from "@narumitw/pi-sync-daemon/engine/settings/config";

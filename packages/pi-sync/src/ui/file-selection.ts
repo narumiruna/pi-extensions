@@ -13,7 +13,6 @@ import {
   syncIncludeSelection,
 } from "../sync/sync-policy.js";
 import { showDirectoryScope } from "./excluded-paths-ui.js";
-import { manualIgnoreFileGuidance } from "./ignore-file-guidance.js";
 
 const BUILT_IN_PREFIX = "builtin:";
 const CUSTOM_PREFIX = "custom:";
@@ -31,10 +30,6 @@ export async function showFileSelection(ctx: ExtensionCommandContext, setupName?
   const config = await loadSettingsConfig(setupName);
   if (signal?.aborted) return;
   validate();
-  if (config.pathPolicy === "ignore-file") {
-    if (ctx.hasUI) ctx.ui.notify(manualIgnoreFileGuidance(config.ignoreFile ?? ".syncignore"), "info");
-    return;
-  }
   if (config.scope === "agent-directory") return showDirectoryScope(ctx, config, signal);
   const selection = syncIncludeSelection(config.include);
   const original: SelectionDraft = {

@@ -4,7 +4,6 @@ import { loadPartialConfig } from "../../settings/config.js";
 import { removeSyncSetup } from "../../settings/settings-management.js";
 import { readLocalConfigObject } from "../../settings/settings-store.js";
 import { ownRecord } from "../../settings/settings-validation.js";
-import { captureMutationOwner } from "../../sync/sync-local.js";
 import type { RunRoute } from "../cancellable-operation.js";
 import { showAddStorageConnection } from "../storage-connections-ui.js";
 import { showSyncSetups } from "../sync-setups-ui.js";
@@ -100,26 +99,15 @@ export async function showEditSyncSetupStorage(ctx: ExtensionCommandContext, nam
 }
 
 async function showRemoveTarget(ctx: ExtensionCommandContext, name: string, signal?: AbortSignal) {
-  const validate = captureMutationOwner(ctx, signal);
   const confirmed = await ctx.ui.confirm(
     "Remove sync setup?",
     `Remove local sync setup “${safeTerminalText(name)}”? Remote data and history are not deleted.`,
     { signal },
   );
   if (signal?.aborted || !confirmed) return;
-  validate();
-  const { revertedToLegacyOnly } = await removeSyncSetup(name, signal);
-  try {
-    validate();
-  } catch {
-    return;
-  }
-  const message = `Removed sync setup “${safeTerminalText(name)}”; remote data was not deleted.`;
-  ctx.ui.notify(
-    revertedToLegacyOnly
-      ? `${message} To resume Continuous sync if enabled, close /sync and run /reload in an attached TUI session, or reopen one Pi client.`
-      : message,
-    "info",
-  );
+  await removeSyncSetup(name, signal);
+  if (signal?.aborted) return;
   await refreshTargetCompletions();
+  if (signal?.aborted) return;
+  ctx.ui.notify(`Removed sync setup “${safeTerminalText(name)}”; remote data was not deleted.`, "info");
 }

@@ -19,7 +19,6 @@ export type RunRoute = (
   onDialog?: (active: boolean) => void,
   retryRefusal?: boolean,
   directionalFingerprint?: string,
-  requirePendingAdoption?: boolean,
 ) => Promise<RunRouteResult | undefined>;
 
 export type CancellableOperationResult = RunRouteResult | { kind: "closed" } | { kind: "cancelled" };
@@ -30,7 +29,6 @@ interface CancellableOperationOptions {
   cancelledMessage?: string | null;
   target?: string;
   directionalFingerprint?: string;
-  requirePendingAdoption?: boolean;
   signal?: AbortSignal;
   isCurrent?: () => boolean;
 }
@@ -46,16 +44,7 @@ export async function runCancellableOperation(
     ctx,
     message,
     (signal, onCommit, onDialog) =>
-      runRoute(
-        route,
-        signal,
-        onCommit,
-        options.target,
-        onDialog,
-        undefined,
-        options.directionalFingerprint,
-        options.requirePendingAdoption,
-      ),
+      runRoute(route, signal, onCommit, options.target, onDialog, undefined, options.directionalFingerprint),
     options,
   );
   return result.kind === "completed" ? (result.value ?? { kind: "failed" }) : result;
@@ -75,7 +64,7 @@ export async function runCancellableTask<Value>(
     onCommit?: () => void,
     onDialog?: (active: boolean) => void,
   ) => Promise<Value>,
-  options: Omit<CancellableOperationOptions, "target" | "directionalFingerprint" | "requirePendingAdoption"> = {},
+  options: Omit<CancellableOperationOptions, "target" | "directionalFingerprint"> = {},
 ): Promise<CancellableTaskResult<Value>> {
   const {
     commitAware = false,

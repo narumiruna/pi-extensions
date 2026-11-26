@@ -1,17 +1,16 @@
 import {
   authorizeAfterExit,
-  automaticPolicyAuthorized,
   captureAutomaticAuthorization,
   consentFingerprint,
   readConsent,
   requireHandover,
-  reviewAutomaticPolicy,
-  revokeAfterExitGrants,
 } from "./consent.js";
 import { createDaemonDebug } from "./daemon-debug.js";
 import { type DocumentView, documentFingerprint } from "./document.js";
 import type { CommandOptions } from "./engine/commands/command-types.js";
 import type { EngineContext } from "./engine/host.js";
+import { retiredIgnorePolicy } from "./engine/settings/retired-ignore-policy.js";
+import { assertNoRetiredRuleJournal } from "./engine/settings/retired-ignore-recovery.js";
 import { captureStartupReviewLock } from "./engine/state/lock.js";
 import { createMonitor } from "./monitor.js";
 import { type Execute, type Execution, MAX_SETTINGS_BYTES, record } from "./protocol.js";
@@ -61,66 +60,18 @@ function optionsFrom(
   };
 }
 /** Engine dispatch is loaded only by the service, never by the public IPC client. */
-export function createEngineService(root: string, ignoreFileSettingsAvailable = false) {
-  const host = installServiceHost(root, ignoreFileSettingsAvailable);
+export function createEngineService(root: string) {
+  const host = installServiceHost(root);
   const monitor = createMonitor(root, host);
   const execute: Execute = (operation, payload, execution) =>
     host.run(execution, async () => {
-      if (operation === "ignore.capabilities") {
-        execution.validate();
-        return { available: ignoreFileSettingsAvailable, ...(ignoreFileSettingsAvailable ? { portableRules: 1 } : {}) };
-      }
-      if (operation === "ignore.migration-offer" || operation === "ignore.migration-defer") {
-        execution.validate();
-        const { readIgnoreMigrationOffer, deferIgnoreMigrationOffer } = await import(
-          "./engine/ignore/ignore-migration-prompt.js"
-        );
-        return operation === "ignore.migration-offer"
-          ? readIgnoreMigrationOffer(payload, execution)
-          : deferIgnoreMigrationOffer(payload, execution);
-      }
-      if (operation === "ignore.save") {
-        execution.validate();
-        throw new Error("Daemon ignore-file saves are unavailable. Edit the existing rule file manually.");
-      }
-      const ignoreFileChange = operation === "ignore.migrate" || operation === "ignore.switch";
-      if (ignoreFileChange && !ignoreFileSettingsAvailable) {
-        execution.validate();
-        throw new Error("Unsupported engine operation.");
-      }
+      if (operation.startsWith("ignore.") || operation === "daemon.authorize-connected")
+        throw retiredIgnorePolicy("settings");
       await monitor.pause();
       execution.validate();
-      if (ignoreFileChange) {
-        const { runIgnorePolicyChange } = await import("./engine/ignore/ignore-settings.js");
-        execution.validate();
-        return runIgnorePolicyChange(operation, payload, {
-          ...execution,
-          committed() {
-            execution.committed();
-            monitor.settingsCommitted(true);
-          },
-        });
-      }
+      if (operation !== "settings.repair-read" && operation !== "monitor.pause") assertNoRetiredRuleJournal();
       if (operation === "daemon.authorize") {
-        const authorized = await authorizeAfterExit(execution, payload);
-        if (authorized?.afterExit) monitor.reviewedPolicy(authorized.config);
-        return Boolean(authorized);
-      }
-      if (operation === "daemon.authorize-connected") {
-        const facts = execution.facts();
-        if (
-          !record(payload) ||
-          typeof payload.fingerprint !== "string" ||
-          !facts?.hasUI ||
-          !["tui", "rpc"].includes(facts.mode)
-        )
-          throw new Error("Automatic policy authorization requires an interactive review.");
-        const { loadConfigForCheck } = await import("./engine/settings/config.js");
-        const config = await loadConfigForCheck(undefined, execution.signal);
-        execution.validate();
-        const approved = await reviewAutomaticPolicy(execution, config, payload.fingerprint);
-        if (approved) monitor.reviewedPolicy(config);
-        return approved;
+        return Boolean(await authorizeAfterExit(execution, payload));
       }
       if (operation === "daemon.handover") {
         await requireHandover(execution);
@@ -136,7 +87,7 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
         return {
           setup: config.setupName,
           fingerprint,
-          automatic: automaticPolicyAuthorized(root, config),
+          automatic: true,
           afterExit: Boolean(
             saved?.afterExit &&
               saved.fingerprint === fingerprint &&
@@ -147,11 +98,6 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
         };
       }
       if (operation === "monitor.pause") return;
-      if (operation === "ignore.read") {
-        const { readIgnoreFileEdit } = await import("./engine/ignore/ignore-edit.js");
-        execution.validate();
-        return readIgnoreFileEdit(payload, execution);
-      }
       if (operation === "settings.read" || operation === "settings.repair-read") {
         const { readLocalConfigDocument } = await import("./engine/settings/settings-store.js");
         const { readActiveLocalConfigDocumentForRepair } = await import("./engine/settings/config-file.js");
@@ -174,16 +120,10 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
           !record(payload.next)
         )
           throw new Error("Invalid settings mutation.");
-        const { localConfigPath, updateLocalConfigDocument, peekLocalConfigDocument } = await import(
-          "./engine/settings/config-file.js"
-        );
+        const { updateLocalConfigDocument, peekLocalConfigDocument } = await import("./engine/settings/config-file.js");
         const { localConfigTemplate } = await import("./engine/settings/settings-store.js");
         const { validateSettingsDocument } = await import("./engine/settings/settings-validation.js");
         const next = validateSettingsDocument(payload.next);
-        const nextMixed = Object.values(next.syncSetups).some((setup) => setup.sync.pathPolicy === "ignore-file");
-        if (!ignoreFileSettingsAvailable && nextMixed) {
-          throw new Error("Ignore-file setup activation is not available in this Daemon build.");
-        }
         if (Buffer.byteLength(JSON.stringify(next)) > MAX_SETTINGS_BYTES)
           throw new Error("Settings exceed the editable local API byte limit; no fields were dropped.");
         const validateSource = (document: { bytes: Buffer; identity: { dev: number; ino: number } } | undefined) => {
@@ -194,34 +134,7 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
         };
         const original = await peekLocalConfigDocument();
         validateSource(original);
-        const before = original && validateSettingsDocument(original.parsed);
-        const wasMixed =
-          before && Object.values(before.syncSetups).some((setup) => setup.sync.pathPolicy === "ignore-file");
-        let prepareSource: (() => Promise<void>) | undefined;
-        if (ignoreFileSettingsAvailable && (nextMixed || wasMixed)) {
-          if (original && original.path !== localConfigPath())
-            throw new Error(
-              "This settings change requires pi-sync.json. No settings were saved; use the canonical filename and reopen the review.",
-            );
-          const { newIgnoreFilename, reviewNewIgnoreSource, prepareReviewedIgnoreSource } = await import(
-            "./engine/ignore/ignore-settings.js"
-          );
-          execution.validate();
-          const filename = newIgnoreFilename(before, next);
-          if (filename) {
-            const reviewed = await reviewNewIgnoreSource(root, filename, execution);
-            validateSource(await peekLocalConfigDocument());
-            prepareSource = async () => {
-              await prepareReviewedIgnoreSource(root, reviewed, execution);
-              execution.validate();
-            };
-          } else if (wasMixed && !nextMixed) {
-            prepareSource = async () => {
-              execution.validate();
-              revokeAfterExitGrants(root);
-            };
-          }
-        }
+        if (original) validateSettingsDocument(original.parsed);
         await requireHandover(execution);
         execution.validate();
         const saved = await updateLocalConfigDocument(
@@ -234,10 +147,9 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
           validateSettingsDocument,
           execution.signal,
           validateSource,
-          prepareSource,
         );
         if (!original || JSON.stringify(original.parsed) !== JSON.stringify(saved)) {
-          monitor.settingsCommitted(Boolean(wasMixed || nextMixed));
+          monitor.settingsCommitted();
           execution.committed();
         }
         return saved;
@@ -365,29 +277,12 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
             await automatic?.refresh();
             automatic?.validate(config);
             execution.validate();
-            if (config.agentMode && !automaticPolicyAuthorized(root, config)) {
-              if (!options.agentRetryRefusal) {
-                execution.noteDebugOutcome?.("blocked");
-                throw new Error(
-                  "Autonomous sync requires a separate policy review. Use Settings → Review automatic transfers, or choose a reviewed push or pull.",
-                );
-              }
-              const approved = await reviewAutomaticPolicy(
-                execution,
-                config,
-                consentFingerprint(root, config),
-                "retry",
-              );
-              execution.validate();
-              if (!approved) return "cancelled" as const;
-              monitor.reviewedPolicy(config);
-            }
             if (options.agentRetryRefusal) {
               const fingerprint = syncCheckConfigFingerprint(config);
               options.validateAgentRetryPolicy = (current) => {
                 execution.validate();
-                if (syncCheckConfigFingerprint(current) !== fingerprint || !automaticPolicyAuthorized(root, current))
-                  throw new Error("Sync setup or automatic transfer approval changed; reopen the retry.");
+                if (syncCheckConfigFingerprint(current) !== fingerprint)
+                  throw new Error("Sync setup changed; reopen the retry.");
               };
             } else if (operation === "sync") monitor.explicitSync(config, execution);
             const binding = JSON.stringify(execution.facts()?.model);
@@ -505,25 +400,18 @@ async function runForegroundDirectional(
     !ctx.hasUI ||
     !["tui", "rpc"].includes(ctx.mode) ||
     !record(payload) ||
-    Object.keys(payload).some(
-      (key) => !["setup", "fingerprint", "retryCheckpoint", "retryAdoptionJournal"].includes(key),
-    ) ||
+    Object.keys(payload).some((key) => !["setup", "fingerprint", "retryCheckpoint"].includes(key)) ||
     typeof payload.setup !== "string" ||
     !payload.setup ||
     payload.setup.length > 512 ||
     typeof payload.fingerprint !== "string" ||
     !fingerprintPattern.test(payload.fingerprint) ||
     (payload.retryCheckpoint !== undefined &&
-      (typeof payload.retryCheckpoint !== "string" || !fingerprintPattern.test(payload.retryCheckpoint))) ||
-    (payload.retryAdoptionJournal !== undefined &&
-      (direction !== "pull" ||
-        payload.retryCheckpoint !== undefined ||
-        typeof payload.retryAdoptionJournal !== "string" ||
-        !fingerprintPattern.test(payload.retryAdoptionJournal)))
+      (typeof payload.retryCheckpoint !== "string" || !fingerprintPattern.test(payload.retryCheckpoint)))
   ) {
     throw new Error("Invalid foreground directional request.");
   }
-  const { setup, fingerprint, retryCheckpoint, retryAdoptionJournal } = payload;
+  const { setup, fingerprint, retryCheckpoint } = payload;
   const { withStateDirectoryAccess } = await import("./engine/state/state-directory.js");
   const { withLock } = await import("./engine/state/lock.js");
   const { loadConfigForCheck, syncCheckConfigFingerprint } = await import("./engine/settings/config.js");
@@ -538,7 +426,7 @@ async function runForegroundDirectional(
   execution.validate();
   return withStateDirectoryAccess(async () => {
     validate(await loadConfigForCheck(undefined, execution.signal));
-    if (retryCheckpoint === undefined && retryAdoptionJournal === undefined) {
+    if (retryCheckpoint === undefined) {
       await requireHandover(execution);
       validate(await loadConfigForCheck(undefined, execution.signal));
       await initialize(ctx, execution, false);
@@ -547,31 +435,22 @@ async function runForegroundDirectional(
         throw new Error("Daemon handover is no longer valid; the transfer was not replayed.");
       await requireStartupRecoveryCleared(execution);
     }
-    return host.runForeground(execution, (setAdoptionResume) =>
+    return host.runForeground(execution, () =>
       withLock(direction, async () => {
         validate(await loadConfigForCheck(undefined, execution.signal));
         let message: string | undefined;
-        let adoptionRecovery = false;
         const outcome = await operations[direction](ctx, {
           ...optionsFrom({ setup, args: [] }, execution, false),
           directionalAction: {
             validate,
-            expectedAdoptionJournal: retryAdoptionJournal,
-            setAdoptionResume(journal) {
-              if (adoptionRecovery) setAdoptionResume(journal);
-            },
             async checkpoint(current) {
               execution.validate();
               if (retryCheckpoint !== undefined && retryCheckpoint !== current)
                 throw new Error(
                   "The transfer source or destination changed during recovery. The transfer was not replayed.",
                 );
-              const accepted = await execution.request("directional-checkpoint", {
-                fingerprint: current,
-                ...(direction === "pull" ? { adoptionRecovery: 1 } : {}),
-              });
-              adoptionRecovery = direction === "pull" && record(accepted) && accepted.adoptionRecovery === 1;
-              if (accepted !== true && !adoptionRecovery)
+              const accepted = await execution.request("directional-checkpoint", { fingerprint: current });
+              if (accepted !== true)
                 throw new Error("The original transfer could not be retained for recovery. No transfer was started.");
               execution.validate();
             },

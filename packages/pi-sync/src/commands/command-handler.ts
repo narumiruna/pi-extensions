@@ -1,5 +1,4 @@
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { currentPiDaemonClient } from "../daemon/pi-client.js";
 import { loadConfig } from "../settings/config.js";
 import { readStateForConfig, syncStateFingerprint } from "../state/sync-state-store.js";
 import { combineSignals } from "../sync/signals.js";
@@ -41,7 +40,6 @@ export async function handleCommand(
     onDialog?: (active: boolean) => void,
     retryRefusal = false,
     directionalFingerprint?: string,
-    requirePendingAdoption?: boolean,
   ) => {
     const [command, ...args] = splitArgs(route);
     if (command === "sync" && !retryRefusal) {
@@ -63,7 +61,6 @@ export async function handleCommand(
       onDialog,
       retryRefusal,
       directionalFingerprint,
-      requirePendingAdoption,
     );
   };
   if (!rawArgs.trim()) {
@@ -73,7 +70,6 @@ export async function handleCommand(
       if (sessionSignal.aborted) return;
       await showSyncManager(ctx, run, sessionSignal, {
         needsDaemonRecovery,
-        getPendingPullReview: () => currentPiDaemonClient()?.pendingPullReview,
         getAttention: () => attention.current(),
         getObservation: () => attention.observation(),
         onObservationInvalidated: () => attention.clearObservation(),

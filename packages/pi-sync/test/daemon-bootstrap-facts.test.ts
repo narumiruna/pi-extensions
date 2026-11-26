@@ -21,6 +21,7 @@ async function fixture(testContext: TestContext, disposeError?: Error) {
   const root = process.env.PI_CODING_AGENT_DIR;
   assert.ok(root, "The isolated Vitest setup must provide an agent directory before import");
   const address = {
+    ignoreFilesRetired: true,
     paths: { root },
     identity: { version: 1, root, instance: "fixture", pid: process.pid, token: "fixture" },
   };

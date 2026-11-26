@@ -105,7 +105,7 @@ For the manager's explicit **Push to remote** and **Pull from remote** actions, 
 
 ## Recover from uncertain daemon cleanup
 
-If a reviewed Pull saves an ignore-rule adoption journal but cannot start applying the files, Pi Sync can recover from an unconfirmed file-queue release when the original Pi session still owns the result and all stop checks pass. Use the same **Pull from remote** action if that option remains available. Pi Sync reconnects only after the original owner exits and asks you to review the recorded snapshot before continuing. It does not publish a new snapshot, change automatic-transfer permission, or require `/reload` on this path.
+A pending ignore-rule adoption journal requires the compatible release; the new daemon does not replay it. Use the [manual recovery guide](../skills/configure-pi-sync/references/configuration.md#retired-ignore-file-policy).
 
 **Stop daemon for recovery…** in `/sync` remains a diagnostic fallback when automatic recovery cannot verify cleanup or daemon cleanup blocks initialization. In TUI or RPC, `/sync daemon recover` opens the same
 review without starting or upgrading the daemon. The review identifies the
@@ -133,6 +133,8 @@ interrupted operation. Normal startup policy applies again on a separate
 `/reload`.
 
 ## Diagnostics and rollback
+
+For retired `.syncignore` settings, snapshots, or pending recovery, use `/skill:configure-pi-sync` or the [manual recovery guide](../skills/configure-pi-sync/references/configuration.md#retired-ignore-file-policy). The new daemon does not convert or replay retired records.
 
 If saving consent fails, that service instance blocks automatic work. Uncertain consent publication, failed revocation, or cleanup failure keeps the owner paused and retains evidence; automatic exit or implicit restart must not clear the barrier and restore an older persisted grant. Preserve the retained file, repair persistence, and revoke permission through the existing repair/revocation path before an explicit restart; a failed save does not prove the previous grant changed. Cleanup failure is not a successful exit.
 

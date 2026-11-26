@@ -25,7 +25,7 @@ export function syncErrorGuidance(error: unknown): string {
       "The resulting files would exceed the sync limit. Review the current scope with /sync config and reduce the local or incoming sync content before retrying.";
   } else if (/\bagent directory exceeds the (64 MiB scan byte|scan file) bound\b/iu.test(message)) {
     next =
-      "Reduce the files managed by this setup before retrying. Use /sync config to find the active ignore file, or edit Agent directory scope in /sync → Settings for legacy rules.";
+      "Reduce the files managed by this setup before retrying. Edit Agent directory scope in /sync → Settings to exclude paths you do not need.";
   } else if (/changed while|type changed|reopen/iu.test(message)) {
     next = "Reopen the item in /sync and review its current settings before saving again.";
   } else if (

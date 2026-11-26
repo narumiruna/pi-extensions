@@ -105,13 +105,9 @@ for (const mode of [
       const optIn = custom || mode === "default sessions" || mode === "decline sessions";
       const selections = [
         "Git",
-        joining
-          ? "Join an existing remote"
-          : custom
-            ? "Agent directory · edit starter rules"
-            : "Agent directory (recommended)",
+        joining ? "Join an existing remote" : custom ? "Agent directory · edit starter rules" : "Agent directory",
         ...(joining
-          ? [mode === "join legacy" ? "Selected paths (legacy)" : "Pi agent directory"]
+          ? [mode === "join legacy" ? "Selected paths" : "Pi agent directory"]
           : ["Keep automatic sync off", optIn ? "Include session conversations" : "Keep sessions off (recommended)"]),
         mode === "discard" ? "Cancel" : "Save setup",
       ];
@@ -137,7 +133,7 @@ for (const mode of [
       });
       const saved = mode !== "discard" && mode !== "decline sessions";
       assert.equal(await showSetupWizard(ctx), saved);
-      assert.equal(firstOption, "Agent directory (recommended)");
+      assert.equal(firstOption, "Recommended Pi settings");
       assert.equal(acknowledgements, optIn ? 1 : 0);
       assert.equal(reviewRemote.mock.calls.length, joining ? 1 : 0);
       if (!saved) {
@@ -229,8 +225,7 @@ for (const mode of ["save", "cancel", "hard-cancel", "stale", "opt in only", "op
             if (frame.includes("Review agent directory scope")) {
               if (mode === "stale") {
                 await updateSyncSetup("home", (setup) => {
-                  if (setup.sync.scope !== "agent-directory" || setup.sync.pathPolicy === "ignore-file")
-                    throw new Error("Unexpected scope");
+                  if (setup.sync.scope !== "agent-directory") throw new Error("Unexpected scope");
                   return { ...setup, sync: { ...setup.sync, reinclude: ["from-another-write"] } };
                 });
               }
@@ -367,8 +362,6 @@ test("adding directory scope promotes a legacy document without changing its act
     await updateSyncSetup(
       "home",
       (setup) => {
-        assert.notEqual(setup.sync.pathPolicy, "ignore-file");
-        if (setup.sync.pathPolicy === "ignore-file") throw new Error("Unexpected scope");
         return { ...setup, sync: { ...setup.sync, exclude: ["private"] } };
       },
       { upgradeExclude: true },

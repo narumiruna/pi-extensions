@@ -1,14 +1,13 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
 import { configFromSettings, type createSettingsConfigView } from "../settings/config.js";
+import { readActiveLocalConfigDocumentForRepair } from "../settings/config-file.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
-import { ownRecord } from "../settings/settings-validation.js";
+import { ownRecord, validateSettingsDocument } from "../settings/settings-validation.js";
 import { throwIfAborted } from "../sync/signals.js";
 import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
 import { captureMutationOwner } from "../sync/sync-local.js";
 import { syncIncludeSelection, syncSessionsSelected } from "../sync/sync-policy.js";
-import { ignoreFileSettingsAvailable } from "./ignore-file-ui.js";
-import { IGNORE_SETUP_MANAGEMENT_LIMIT, ignoreSetupRecovery, loadSettingsCatalog } from "./settings-review.js";
 import { safeTerminalText } from "./terminal-text.js";
 
 export async function hasAnotherSwitchableSetup(
@@ -40,7 +39,6 @@ type SyncSetupActions = {
 interface SetupMenuState {
   setups: Record<string, unknown>;
   active?: string;
-  recovery?: string[];
   selected?: {
     name: string;
     detail: string[];
@@ -77,9 +75,9 @@ export async function showSyncSetups(
         return {
           kind: "actions",
           title: "Sync setups",
-          lines: state.recovery ?? ["What to sync, where to store it, and when to sync."],
+          lines: ["What to sync, where to store it, and when to sync."],
           items: [
-            ...(state.recovery ? [] : [{ id: "add", label: "Add sync setup", action: "add" as const }]),
+            { id: "add", label: "Add sync setup", action: "add" },
             ...names.map((name, index) => {
               const id = `setup:${index}`;
               nameById.set(id, name);
@@ -100,7 +98,7 @@ export async function showSyncSetups(
         lines: state.selected?.detail ?? ["This sync setup no longer exists."],
         items: state.selected
           ? [
-              ...(state.recovery || state.selected.name === state.active || !state.selected.valid
+              ...(state.selected.name === state.active || !state.selected.valid
                 ? []
                 : [
                     {
@@ -109,7 +107,7 @@ export async function showSyncSetups(
                       action: "make-current" as const,
                     },
                   ]),
-              ...(state.recovery ? [] : [{ id: "edit", label: "Edit storage location…", action: "edit" as const }]),
+              { id: "edit", label: "Edit storage location…", action: "edit" },
               ...(state.selected.removeUnavailable
                 ? []
                 : [
@@ -126,8 +124,7 @@ export async function showSyncSetups(
       }),
     },
     actions: {
-      add: async ({ state }) => {
-        if (state.recovery) return { kind: "rejected" };
+      add: async () => {
         try {
           await actions.add(signal);
         } catch (error) {
@@ -142,7 +139,7 @@ export async function showSyncSetups(
         return selectedName ? { kind: "to", screen: "detail" } : { kind: "rejected" };
       },
       "make-current": async ({ state }) => {
-        if (!selectedName || state.recovery || !state.selected?.valid) return { kind: "rejected" };
+        if (!selectedName || !state.selected?.valid) return { kind: "rejected" };
         try {
           exit = (await actions.makeCurrent(selectedName, signal)) === "exit";
           return exit ? { kind: "close" } : { kind: "stay" };
@@ -151,8 +148,8 @@ export async function showSyncSetups(
           return { kind: "stay" };
         }
       },
-      edit: async ({ state }) => {
-        if (!selectedName || state.recovery) return { kind: "rejected" };
+      edit: async () => {
+        if (!selectedName) return { kind: "rejected" };
         try {
           await actions.edit(selectedName, signal);
         } catch (error) {
@@ -179,57 +176,44 @@ export async function showSyncSetups(
     },
   });
   await runMenu(ctx, menu, {
-    getState: async ({ signal: loadSignal }) => loadSetupMenuState(ctx, selectedName, loadSignal),
+    getState: ({ signal: loadSignal }) => loadSetupMenuState(selectedName, loadSignal),
     signal,
     isCurrent,
   });
   return exit ? "exit" : undefined;
 }
 
-async function loadSetupMenuState(
-  ctx: ExtensionCommandContext,
-  selectedName: string | undefined,
-  signal: AbortSignal,
-): Promise<SetupMenuState> {
-  const catalog = await loadSettingsCatalog();
+async function loadSetupMenuState(selectedName: string | undefined, signal?: AbortSignal): Promise<SetupMenuState> {
+  const document = await readActiveLocalConfigDocumentForRepair();
   throwIfAborted(signal);
-  if (!catalog) return { setups: {} };
-  const { syncSetups: setups, activeSyncSetup: active } = catalog.settings;
-  const recovery =
-    catalog.ignoreSetups.length && !(await ignoreFileSettingsAvailable(ctx, signal))
-      ? [IGNORE_SETUP_MANAGEMENT_LIMIT, ...ignoreSetupRecovery(catalog.path)]
-      : undefined;
-  throwIfAborted(signal);
-  if (!selectedName || !Object.hasOwn(setups, selectedName)) return { setups, active, recovery };
+  if (!document) return { setups: {} };
+  const raw = validateSettingsDocument(document.parsed);
+  const { syncSetups: setups, activeSyncSetup: active } = raw;
+  if (!selectedName || !Object.hasOwn(setups, selectedName)) return { setups, active };
   const setupCount = Object.keys(setups).length;
   const isCurrent = selectedName === active;
   let detail: string[];
   let valid = true;
   try {
-    const config = configFromSettings(catalog.settings, selectedName);
+    const config = configFromSettings(raw, selectedName);
+    throwIfAborted(signal);
     const selection = syncIncludeSelection(config.include);
     detail = [
       `Status: ${isCurrent ? "Current" : "Not current"}`,
       `Storage connection: ${safeTerminalText(config.connectionName)}`,
       `Endpoint: ${storageEndpoint(config)}`,
       `Storage location: ${storageLocation(config)}`,
-      config.pathPolicy === "ignore-file"
-        ? `Sync scope: Pi agent directory · ignore file: ${safeTerminalText(config.ignoreFile ?? ".syncignore")}`
-        : config.scope
-          ? `Sync scope: Pi agent directory · ${config.exclude?.length ?? 0} exclusions · ${config.reinclude?.length ?? 0} exceptions`
-          : `Included content: ${selection.builtIns.length} built-in groups · ${selection.custom.length} extra paths`,
+      config.scope
+        ? `Sync scope: Pi agent directory · ${config.exclude?.length ?? 0} exclusions · ${config.reinclude?.length ?? 0} exceptions`
+        : `Included content: ${selection.builtIns.length} built-in groups · ${selection.custom.length} extra paths`,
       `Sessions: ${syncSessionsSelected(config) ? "On — privacy-sensitive" : "Off"}`,
       `Automatic sync: ${config.automatic ? "On" : "Off"}`,
       `Automatic transfer at startup: ${config.automaticTransfer ? "On — may upload, replace, or delete selected files; no reload" : "Off"}`,
       `Autonomous sync: ${config.agentMode ? "On (autonomous merged sync)" : "Off"}`,
       `Continuous sync: ${config.continuous ? (config.agentMode ? "On (recurring requests and transfers)" : "Saved On; paused until Autonomous sync is enabled") : "Off"}`,
-      ...(recovery
-        ? []
-        : [
-            isCurrent
-              ? "Edit included content and automatic sync in /sync → Settings."
-              : "To edit included content or automatic sync, make this setup current, then open /sync → Settings.",
-          ]),
+      isCurrent
+        ? "Edit included content and automatic sync in /sync → Settings."
+        : "To edit included content or automatic sync, make this setup current, then open /sync → Settings.",
     ];
   } catch (error) {
     valid = false;
@@ -239,19 +223,11 @@ async function loadSetupMenuState(
       "Make current and sync are unavailable until this setup is repaired.",
     ];
   }
-  const removeNeedsSwitch = isCurrent && setupCount > 1;
-  const ignoreSetupsRemain = catalog.ignoreSetups.some((name) => name !== selectedName);
-  const removeUnavailable = removeNeedsSwitch || Boolean(recovery && ignoreSetupsRemain);
-  if (recovery) {
-    if (removeUnavailable) detail.unshift("Remove unavailable here; use manual recovery.");
-    detail.unshift(...recovery);
-  } else if (removeNeedsSwitch) {
-    detail.push("Remove unavailable: switch to another setup first.");
-  }
+  const removeUnavailable = isCurrent && setupCount > 1;
+  if (removeUnavailable) detail.push("Remove unavailable: switch to another setup first.");
   return {
     setups,
     active,
-    recovery,
     selected: { name: selectedName, detail, valid, removeUnavailable },
   };
 }

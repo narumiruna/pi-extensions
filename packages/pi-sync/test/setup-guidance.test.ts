@@ -176,8 +176,8 @@ test.each([
 });
 
 test.each([
-  ["Agent directory exceeds the 64 MiB scan byte bound.", /find the active ignore file/u],
-  ["Agent directory exceeds the scan file bound.", /edit Agent directory scope/u],
+  ["Agent directory exceeds the 64 MiB scan byte bound.", /Agent directory scope/u],
+  ["Agent directory exceeds the scan file bound.", /Edit Agent directory scope/u],
   ["Agent directory exceeds the scan entry bound.", /Exclude whole subdirectories/u],
   ["Projected agent directory exceeds the 64 MiB scan byte bound.", /local or incoming sync content/u],
   ["Projected agent directory exceeds the scan file bound.", /local or incoming sync content/u],
@@ -185,7 +185,7 @@ test.each([
 ] as const)("scan limits give local recovery guidance: %s", (message, expected) => {
   const output = syncErrorGuidance(new Error(message));
   assert.ok(output.startsWith(`${message}\n`));
-  assert.match(output, /use \/sync config|with \/sync config/iu);
+  assert.match(output, /\/sync (?:config|→ Settings)/iu);
   assert.match(output, expected);
   assert.doesNotMatch(output, /Check setup|Diagnostics|\/sync doctor/u);
 });

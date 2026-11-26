@@ -10,7 +10,6 @@ import {
   agentDirectoryAnchor,
   agentDirectoryPhysicalSessionPath,
   agentDirectorySessionRoot,
-  reservedIgnoreTargetGuard,
 } from "./snapshot-exclude-safety.js";
 import { sessionStorageRoot } from "./snapshot-paths.js";
 
@@ -27,7 +26,6 @@ import {
   customIncludePathsByLower,
   DEFAULT_SYNC_INCLUDE,
   includeFromSelectionConfig,
-  isIgnoreControlPath,
   isPreservableUnmanagedSnapshotPath,
   MAX_AGENT_DIRECTORY_ENTRIES,
   MAX_AGENT_DIRECTORY_FILES,
@@ -42,13 +40,12 @@ import {
   syncIncludeSelection,
   syncSessionsSelected,
 } from "../sync/sync-policy.js";
-import {
-  type AgentDirectoryInventory,
-  IGNORE_SNAPSHOT_VERSION,
-  type Snapshot,
-  type SnapshotFile,
-  type SnapshotObservation,
-  type SnapshotOptions,
+import type {
+  AgentDirectoryInventory,
+  Snapshot,
+  SnapshotFile,
+  SnapshotObservation,
+  SnapshotOptions,
 } from "./snapshot-types.js";
 
 export { canonicalSnapshotPathForConfig, isConfiguredSnapshotPath } from "../sync/sync-policy.js";
@@ -140,7 +137,7 @@ async function collectSnapshotFiles<T extends { path: string }>(
   const sessionDir =
     options.scope === "agent-directory"
       ? options.sessionDir
-      : (options.sessionDir ?? (needsSessionConfig ? await configuredSessionDir(options) : undefined));
+      : (options.sessionDir ?? (needsSessionConfig ? await configuredSessionDir() : undefined));
   options.signal?.throwIfAborted();
   const collectionOptions = { ...policy, sessionDir };
   const collected =
@@ -188,19 +185,12 @@ export async function createSnapshot(profile: string, options: SnapshotOptions =
   options.signal?.throwIfAborted();
   const selection = selectionForSnapshot(include, options.exclude, options);
   const snapshot: Snapshot = {
-    version:
-      selection.version === 4
-        ? IGNORE_SNAPSHOT_VERSION
-        : options.scope === "agent-directory"
-          ? 5
-          : options.exclude === undefined
-            ? VERSION
-            : 4,
+    version: options.scope === "agent-directory" ? 5 : options.exclude === undefined ? VERSION : 4,
     id: snapshotId(),
     createdAt: new Date().toISOString(),
     machine: os.hostname(),
     profile,
-    syncSessions: selection.version === 4 ? files.some((file) => isSessionPath(file.path)) : syncSessions,
+    syncSessions: syncSessions,
     selection,
     files,
   };
@@ -235,8 +225,7 @@ async function collectSelectedFiles<T extends { path: string }>(
   materialize: MaterializeFile<T>,
 ) {
   const signal = options.signal;
-  const guardReserved = reservedIgnoreTargetGuard(root, options);
-  const collection = { signal, excluded, guardReserved, materialize };
+  const collection = { signal, excluded, materialize };
   signal?.throwIfAborted();
   const results: T[] = [];
   const entries = await fs.readdir(root, { withFileTypes: true });
@@ -345,22 +334,12 @@ async function readScannedFile(candidate: ScannedPath, signal?: AbortSignal) {
   }
 }
 
-export async function agentDirectoryConfiguredSessionDir(
-  signal?: AbortSignal,
-  root = agentDir(),
-  options: Pick<SnapshotOptions, "reservedIgnoreNames"> = {},
-) {
-  const content = await readAgentDirectorySettings(signal, root, options);
+export async function agentDirectoryConfiguredSessionDir(signal?: AbortSignal, root = agentDir()) {
+  const content = await readAgentDirectorySettings(signal, root);
   return content === undefined ? undefined : agentDirectorySessionDirFromSettings(content);
 }
 
-export async function readAgentDirectorySettings(
-  signal?: AbortSignal,
-  root = agentDir(),
-  options: Pick<SnapshotOptions, "reservedIgnoreNames"> = {},
-) {
-  const guardReserved = reservedIgnoreTargetGuard(root, options);
-  if (guardReserved) await guardReserved(path.join(root, "settings.json"));
+export async function readAgentDirectorySettings(signal?: AbortSignal, root = agentDir()) {
   const absolute = path.resolve(root);
   const canonical = path.join(await fs.realpath(path.dirname(absolute)), path.basename(absolute));
   await identify(absolute, canonical, signal);
@@ -411,14 +390,9 @@ async function collectAgentDirectory<T extends { path: string }>(
   const signal = options.signal;
   const excluded = compileSyncPolicyExclude(options);
   const canTraverse = compileSyncPolicyTraversal(options);
-  const sessionDir = options.sessionDir ?? (await agentDirectoryConfiguredSessionDir(signal, root, options));
-  const isPhysicalSessionPath = agentDirectoryPhysicalSessionPath(
-    root,
-    sessionDir,
-    options.ignorePolicy,
-    options.reservedIgnoreNames,
-  );
-  const sessionRoot = agentDirectorySessionRoot(root, sessionDir, options.ignorePolicy, options.reservedIgnoreNames);
+  const sessionDir = options.sessionDir ?? (await agentDirectoryConfiguredSessionDir(signal, root));
+  const isPhysicalSessionPath = agentDirectoryPhysicalSessionPath(root, sessionDir);
+  const sessionRoot = agentDirectorySessionRoot(root, sessionDir);
   const directories: ScannedPath[] = [];
   const candidates: Array<ScannedPath & { snapshotPath: string }> = [];
   const entries = new Map<string, "file" | "directory" | "unreviewed">();
@@ -451,7 +425,7 @@ async function collectAgentDirectory<T extends { path: string }>(
         signal,
       );
       if (entry.isDirectory()) {
-        if (!excluded(snapshotPath, true)) entries.set(candidate.absolute, "directory");
+        if (!excluded(snapshotPath)) entries.set(candidate.absolute, "directory");
         await walk(candidate, snapshotPath, sessions);
       } else {
         if (!candidate.stat.isFile() || candidate.stat.nlink !== 1) changedScan();
@@ -503,10 +477,7 @@ async function collectAgentDirectory<T extends { path: string }>(
     });
   }
   for (const directory of directories) await recheck(directory, signal);
-  if (
-    options.sessionDir === undefined &&
-    (await agentDirectoryConfiguredSessionDir(signal, root, options)) !== sessionDir
-  )
+  if (options.sessionDir === undefined && (await agentDirectoryConfiguredSessionDir(signal, root)) !== sessionDir)
     changedScan();
   const currentSessionDirectory = await identifySessionRoot();
   if (
@@ -539,7 +510,6 @@ type LegacyCollectionOptions<T> = {
   virtualPrefix?: string;
   signal?: AbortSignal;
   excluded: (relativePath: string) => boolean;
-  guardReserved: ReturnType<typeof reservedIgnoreTargetGuard>;
 };
 
 async function collectIncludedPath<T>(
@@ -575,7 +545,6 @@ async function collectDirectory<T>(
 ) {
   options.signal?.throwIfAborted();
   const absoluteDirectory = path.join(root, relativeDirectory);
-  if (options.guardReserved) await options.guardReserved(absoluteDirectory);
   options.signal?.throwIfAborted();
   for (const entry of await fs.readdir(absoluteDirectory, { withFileTypes: true })) {
     options.signal?.throwIfAborted();
@@ -590,30 +559,17 @@ async function collectDirectory<T>(
   }
 }
 
-export async function readLegacySnapshotSource(
-  absolutePath: string,
-  guardReserved: ReturnType<typeof reservedIgnoreTargetGuard>,
-  signal?: AbortSignal,
-) {
-  if (!guardReserved) return fs.readFile(absolutePath, { signal });
-  signal?.throwIfAborted();
-  const canonical = await guardReserved(absolutePath);
-  const candidate = await identify(absolutePath, canonical, signal);
-  if (!candidate.stat.isFile() || candidate.stat.nlink !== 1) changedScan();
-  return readScannedFile(candidate, signal);
-}
-
 async function addFile<T>(
   results: T[],
   root: string,
   relativePath: string,
   snapshotPath: string,
-  { signal, guardReserved, materialize }: LegacyCollectionOptions<T>,
+  { signal, materialize }: LegacyCollectionOptions<T>,
 ) {
   signal?.throwIfAborted();
   if (!isSafeSnapshotPath(snapshotPath)) return;
   const absolutePath = safeJoin(root, relativePath);
-  const content = await readLegacySnapshotSource(absolutePath, guardReserved, signal);
+  const content = await fs.readFile(absolutePath, { signal });
   signal?.throwIfAborted();
   results.push(materialize(snapshotPath, content));
 }
@@ -645,7 +601,6 @@ export function snapshotTarget(root: string, relativePath: string, configuredSes
 
 export function snapshotIncludesSessions(snapshot: Snapshot) {
   if (snapshot.selection?.version === 3) return syncSessionsSelected(snapshot.selection);
-  if (snapshot.selection?.version === 4) return snapshot.files.some((file) => isSessionPath(file.path));
   return (
     snapshot.syncSessions === true ||
     (snapshotSelectionInclude(snapshot)?.includes("sessions") === true &&
@@ -659,36 +614,21 @@ export function filterSnapshotForConfigPolicy(
   config: SyncSelectionConfig,
   options: { regenerateId?: boolean; sessionDir?: string } = {},
 ) {
+  requireLegacyTransferPolicy(snapshot);
   const include = includeFromSelectionConfig(config);
   const wholeDirectory = config.scope === "agent-directory";
-  if (!wholeDirectory || !config.ignorePolicy) requireLegacyTransferPolicy(snapshot);
   const exclude = config.exclude ?? (snapshot.version >= 4 ? [] : undefined);
-  const selection = selectionForSnapshot(include, exclude, config);
   const files = wholeDirectory
     ? filterAgentDirectoryFiles(snapshot.files, config, options.sessionDir)
     : canonicalizeSnapshotFilesForConfig(snapshot.files, config, customIncludePathsByLower(include));
-  const { ignoreRules: _ignoreRules, ...image } = snapshot;
   const filtered = {
-    ...image,
-    version:
-      selection.version === 4
-        ? IGNORE_SNAPSHOT_VERSION
-        : wholeDirectory
-          ? 5
-          : exclude === undefined
-            ? snapshot.version
-            : 4,
-    syncSessions:
-      selection.version === 4
-        ? files.some((file) => isSessionPath(file.path))
-        : syncSessionsSelected(config)
-          ? snapshot.syncSessions
-          : false,
-    selection,
+    ...snapshot,
+    version: wholeDirectory ? 5 : exclude === undefined ? snapshot.version : 4,
+    syncSessions: syncSessionsSelected(config) ? snapshot.syncSessions : false,
+    selection: selectionForSnapshot(include, exclude, config),
     files,
   };
-  if (!options.regenerateId || (snapshot.version === filtered.version && snapshotsMatch(snapshot, filtered)))
-    return filtered;
+  if (!options.regenerateId || snapshotsMatch(snapshot, filtered)) return filtered;
   return {
     ...filtered,
     id: snapshotId(),
@@ -699,9 +639,7 @@ export function filterSnapshotForConfigPolicy(
 
 function filterAgentDirectoryFiles(files: SnapshotFile[], config: SyncSelectionConfig, sessionDir?: string) {
   const configured = configuredSnapshotPathMatcher(config);
-  const isPhysicalSessionPath = sessionDir
-    ? agentDirectoryPhysicalSessionPath(agentDir(), sessionDir, config.ignorePolicy, config.reservedIgnoreNames)
-    : undefined;
+  const isPhysicalSessionPath = sessionDir ? agentDirectoryPhysicalSessionPath(agentDir(), sessionDir) : undefined;
   const projected = files.filter((file) => {
     if (!isSafeSnapshotPath(file.path) || !configured(file.path)) return false;
     if (/^sessions(?:\/|$)/iu.test(file.path)) return isSessionFilePath(file.path);
@@ -753,13 +691,12 @@ function isPreferredExtraCandidate(
 }
 
 export function snapshotWithoutSessions(snapshot: Snapshot) {
-  requireLegacyTransferPolicy(snapshot);
   const files = snapshot.files.filter((file) => !isSessionPath(file.path));
   const include = snapshotSelectionInclude(snapshot)?.filter((item) => item !== "sessions");
   if (
     files.length === snapshot.files.length &&
     snapshot.syncSessions !== true &&
-    include?.length === snapshot.selection?.include?.length
+    include?.length === snapshot.selection?.include.length
   ) {
     return snapshot;
   }
@@ -795,8 +732,6 @@ export function scanSnapshot(snapshot: Snapshot) {
       }
     }
   }
-  if (snapshot.ignoreRules && SECRET_PATTERNS.some((pattern) => pattern.test(snapshot.ignoreRules?.text ?? "")))
-    findings.push(snapshot.ignoreRules.filename);
   return findings;
 }
 
@@ -806,17 +741,10 @@ export function mergeRemotePreservedFiles(
   config: SyncSelectionConfig,
   options: { sessionDir?: string } = {},
 ) {
-  if (config.scope !== "agent-directory" || !config.ignorePolicy) {
-    requireLegacyTransferPolicy(local);
-    requireLegacyTransferPolicy(remote);
-  }
+  requireLegacyTransferPolicy(local);
+  requireLegacyTransferPolicy(remote);
   if (config.scope === "agent-directory")
     return filterSnapshotForConfigPolicy(local, config, { ...options, regenerateId: true });
-  if (config.reservedIgnoreNames !== undefined) {
-    const names = new Set(config.reservedIgnoreNames);
-    const files = local.files.filter((file) => !isIgnoreControlPath(toPosix(file.path), names));
-    if (files.length !== local.files.length) local = regenerateSnapshotIdentity({ ...local, files });
-  }
   const localPathNames = new Set(local.files.map((file) => file.path.toLowerCase()));
   const preservedPathNames = new Set<string>();
   const configured = configuredSnapshotPathMatcher(config);

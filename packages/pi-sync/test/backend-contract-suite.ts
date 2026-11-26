@@ -114,17 +114,18 @@ export function registerSyncBackendContractSuite(name: string, create: BackendFa
   });
 
   if (objectStorage) {
-    test(`${name} contract: stale ignore policy cannot stage new bytes or change the active head`, async () => {
+    test(`${name} contract: stale publication review cannot stage new bytes or change the active head`, async () => {
       await withBackend(create, async (backend) => {
         const image = (id: string, content: string) => ({
           ...snapshot([{ path: "skills/public.md", content: Buffer.from(content) }]),
           id,
-          version: 6,
+          version: 5,
           selection: {
-            version: 4 as const,
+            version: 3 as const,
             scope: "agent-directory" as const,
-            fingerprint: "a".repeat(64),
-            sessions: false,
+            include: [],
+            exclude: [],
+            reinclude: [],
           },
         });
         const publishAt = (
@@ -134,7 +135,7 @@ export function registerSyncBackendContractSuite(name: string, create: BackendFa
         ) => {
           let checks = 0;
           return backend.publishSnapshot(next, expected, {
-            validateIgnorePolicy: async () => {
+            validatePublication: async () => {
               if (++checks === rejectAt) throw new Error("Ignore policy changed");
             },
             onCommit: () => assert.fail("stale policy must not reach the commit boundary"),

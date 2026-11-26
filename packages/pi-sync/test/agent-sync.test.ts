@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { test, vi } from "vitest";
-import { createMockContext } from "../../../test/support.js";
 import { SyncBackendConflictError } from "../src/backends/sync-backend.js";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
@@ -431,50 +430,6 @@ test("unchanged refused candidates are reused without another provider request",
         /refused/,
       );
     assert.equal(mock.requests.length, 1);
-  }));
-
-test("mixed settings replacement cannot inherit an otherwise matching resolver candidate", async () =>
-  withTempHome(async (agentDir) => {
-    const f = await createMergeFixture(agentDir);
-    const file = localConfigPath();
-    const settings = JSON.parse(await fs.readFile(file, "utf8"));
-    settings.version = 8;
-    settings.syncSetups.other = {
-      storage: { ...settings.syncSetups.home.storage, path: "other" },
-      sync: { scope: "agent-directory", pathPolicy: "ignore-file", automatic: false },
-    };
-    await fs.writeFile(file, JSON.stringify(settings));
-    assert.equal(
-      await push(
-        createMockContext({ mode: "rpc", hasUI: true }).ctx,
-        { ...mergeOptions, yes: false, force: true },
-        undefined,
-        () => f.backend,
-      ),
-      "applied",
-    );
-    await enabled();
-    await fs.writeFile(path.join(agentDir, "AGENTS.md"), "local\n");
-    await f.remoteEdit("AGENTS.md", "remote\n");
-    const mock = agentContext((units) =>
-      JSON.stringify({ version: 1, results: units.map((unit) => ({ id: unit.id, refuse: true })) }),
-    );
-    const attempt = () =>
-      assert.rejects(
-        withStateDirectoryAccess(() =>
-          withAgentSyncLock(mock.ctx, mergeOptions, (current) => syncBoth(mock.ctx, current, () => f.backend)),
-        ),
-        /refused/u,
-      );
-    await attempt();
-    await attempt();
-    assert.equal(mock.requests.length, 1);
-    const before = await fs.readFile(file);
-    await fs.rename(file, `${file}.original`);
-    await fs.writeFile(file, before, { mode: 0o600 });
-    await attempt();
-    assert.equal(mock.requests.length, 2);
-    assert.equal(await fs.readFile(path.join(agentDir, "AGENTS.md"), "utf8"), "local\n");
   }));
 
 test("explicit partial policy alone permits progress around unsupported groups", async () =>

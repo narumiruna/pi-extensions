@@ -12,55 +12,19 @@ export interface SnapshotObservation {
   files: Array<SnapshotFileHash & { settingsContent?: Buffer }>;
 }
 
-export interface EffectiveIgnorePolicy {
-  filename: string;
-  sourceDigest: string;
-  fingerprint: string;
-  sessions: boolean;
-  reservedNames: readonly string[];
-  matches(path: string, directory?: boolean): boolean;
-}
-
 export interface DirectoryScope {
   scope?: "agent-directory";
   reinclude?: readonly string[];
-  ignorePolicy?: EffectiveIgnorePolicy;
-  reservedIgnoreNames?: readonly string[];
-}
-
-export const IGNORE_SNAPSHOT_VERSION = 6;
-export const RULES_SNAPSHOT_VERSION = 7;
-
-export function isIgnoreSnapshotVersion(version: unknown) {
-  return version === IGNORE_SNAPSHOT_VERSION || version === RULES_SNAPSHOT_VERSION;
 }
 
 export function isSupportedSnapshotVersion(version: unknown) {
-  return (
-    version === 1 ||
-    version === 2 ||
-    version === 3 ||
-    version === 4 ||
-    version === 5 ||
-    isIgnoreSnapshotVersion(version)
-  );
-}
-
-export interface IgnoreSnapshotSelection {
-  version: 4;
-  scope: "agent-directory";
-  fingerprint: string;
-  sessions: boolean;
-  include?: never;
-  exclude?: never;
-  reinclude?: never;
+  return version === 1 || version === 2 || version === 3 || version === 4 || version === 5;
 }
 
 export type SnapshotSelection =
   | { version: 1; include: string[]; exclude?: never; scope?: never; reinclude?: never }
   | { version: 2; include: string[]; exclude: string[]; scope?: never; reinclude?: never }
-  | { version: 3; scope: "agent-directory"; include: string[]; exclude: string[]; reinclude: string[] }
-  | IgnoreSnapshotSelection;
+  | { version: 3; scope: "agent-directory"; include: string[]; exclude: string[]; reinclude: string[] };
 
 export interface Snapshot {
   version: number;
@@ -72,7 +36,6 @@ export interface Snapshot {
   syncSessions?: boolean;
   /** Portable, credential-free included-content intent. Absent on legacy snapshots. */
   selection?: SnapshotSelection;
-  ignoreRules?: { filename: string; text: string } | null;
   localFields?: string[];
   files: SnapshotFile[];
 }
@@ -88,14 +51,10 @@ export interface AgentDirectoryInventory {
 }
 
 export interface SnapshotOptions extends DirectoryScope {
-  setupName?: string;
-  recoverySetupKey?: string;
-  ignoreSourceIdentity?: string;
   signal?: AbortSignal;
+  validateApplyReview?: () => Promise<void>;
   /** Caller-owned session/generation guard, rechecked at file-mutation boundaries. */
   validateMutation?: () => void;
-  validateIgnorePolicy?: () => Promise<void>;
-  validateApplyReview?: () => Promise<void>;
   /** Reviewed regular-file preimages; null means the path was absent. Checked under mutation queues. */
   expectedFileHashes?: Readonly<Record<string, string | null>>;
   include?: string[];

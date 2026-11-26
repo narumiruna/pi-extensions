@@ -464,12 +464,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       digest,
       client,
       generation: peer.facts.generation,
-      participantGeneration: [
-        "startup-transfer",
-        "shutdown",
-        "daemon.authorize",
-        "daemon.authorize-connected",
-      ].includes(operation)
+      participantGeneration: ["startup-transfer", "shutdown", "daemon.authorize"].includes(operation)
         ? participantGeneration
         : undefined,
       controller: new AbortController(),
@@ -494,10 +489,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         if (Buffer.byteLength(JSON.stringify(result ?? null)) > MAX_MESSAGE_BYTES / 2)
           throw new Error("Operation result exceeds its byte limit; use bounded inspection.");
         if (isForegroundDirection(operation) && isForegroundQueueOutcome(result)) {
-          if (
-            (result.foregroundQueueCleanup === "before-mutation" && job.committed) ||
-            (result.foregroundQueueCleanup === "resume-adoption" && (!job.committed || operation !== "pull.foreground"))
-          )
+          if (result.foregroundQueueCleanup === "before-mutation" && job.committed)
             throw Object.assign(new Error("File-queue release and transfer outcome could not be verified."), {
               code: OWNERSHIP_CLEANUP_REQUIRED,
             });
@@ -822,6 +814,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     if (method === "hello")
       return {
         version: PROTOCOL_VERSION,
+        ignoreFilesRetired: true,
         buildVersion: DAEMON_BUILD_VERSION,
         ...(DAEMON_BUILD_ID && { buildId: DAEMON_BUILD_ID }),
         upgradeStop: 1,

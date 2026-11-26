@@ -15,8 +15,6 @@ import path from "node:path";
 import { syncCheckConfigFingerprint } from "./engine/settings/config.js";
 import type { AnySyncConfig } from "./engine/settings/settings-types.js";
 import { stateDir } from "./engine/state/state-directory.js";
-import { startupTransferEnabled } from "./engine/sync/agent-policy.js";
-import { syncSessionsSelected } from "./engine/sync/sync-policy.js";
 import { safeTerminalText } from "./engine/ui/terminal-text.js";
 import { type ClientFacts, type Execution, record } from "./protocol.js";
 
@@ -202,127 +200,10 @@ export function consentFingerprint(root: string, config: AnySyncConfig) {
   if (!consent) throw new Error("Review daemon handover first.");
   // Keep the original digest domain across package renames; never persist the internal freshness token.
   return createHmac("sha256", consent.nonce)
-    .update(config.ignorePolicy ? "sync-daemon-consent/portable-ignore/v1" : "sync-daemon-consent/v1")
+    .update("sync-daemon-consent/v1")
     .update(syncCheckConfigFingerprint(config))
     .digest("hex");
 }
-export function automaticPolicyAuthorized(root: string, config: AnySyncConfig) {
-  if (config.reservedIgnoreNames === undefined) return true;
-  const saved = readConsent(root)?.setups[config.setupName];
-  return saved?.automaticFingerprint !== undefined && saved.automaticFingerprint === consentFingerprint(root, config);
-}
-
-function ignorePublicationConsentLines(config: AnySyncConfig) {
-  const policy = config.ignorePolicy;
-  if (!policy) return [];
-  return [
-    "Review this file before you approve its scope. Peers must be able to read snapshot version 7.",
-    policy.matches(policy.filename)
-      ? "The rule file excludes itself; new snapshots omit its text."
-      : "New snapshots include the rule file, including any rule comments and private path names.",
-  ];
-}
-
-export async function reviewAutomaticPolicy(
-  execution: Execution,
-  config: AnySyncConfig,
-  expectedFingerprint: string,
-  origin?: "retry",
-) {
-  if (consentFingerprint(execution.root, config) !== expectedFingerprint)
-    throw new Error("Setup changed; reopen the automatic transfer review.");
-  if (config.reservedIgnoreNames === undefined || automaticPolicyAuthorized(execution.root, config)) {
-    execution.noteDebugOutcome?.("skipped");
-    return false;
-  }
-  const consent = readConsent(execution.root);
-  if (!consent) {
-    execution.noteDebugOutcome?.("blocked");
-    return false;
-  }
-  const consentToken = JSON.stringify(consent);
-  const peers = participantBinding(execution);
-  const binding = JSON.stringify(execution.facts());
-  const { loadConfigForCheck } = await import("./engine/settings/config.js");
-  const fingerprint = syncCheckConfigFingerprint(config);
-  const validate = () => {
-    execution.validate();
-    execution.signal.throwIfAborted();
-    if (
-      participantBinding(execution) !== peers ||
-      JSON.stringify(execution.facts()) !== binding ||
-      JSON.stringify(readConsent(execution.root)) !== consentToken
-    )
-      throw new Error("Participants or consent changed during automatic transfer review.");
-  };
-  const current = await loadConfigForCheck(undefined, execution.signal);
-  validate();
-  if (syncCheckConfigFingerprint(current) !== fingerprint) {
-    execution.noteDebugOutcome?.("blocked");
-    return false;
-  }
-  const modes = [
-    startupTransferEnabled(config) && "Automatic transfer at startup",
-    config.automatic &&
-      syncSessionsSelected(config) &&
-      "Push selected files on shutdown (including sessions when selected)",
-    config.continuous && config.agentMode && "Continuous sync and Autonomous model requests",
-  ].filter(Boolean);
-  if (modes.length === 0) throw new Error("No automatic transfer mode is enabled under the current local rules.");
-  const title = "Allow the enabled automatic sync modes for this setup?";
-  const lines = [
-    `Setup: ${safeTerminalText(config.setupName)}`,
-    `Destination: ${safeTerminalText(config.connectionName)} · ${safeTerminalText(config.storagePath)}`,
-    ...(config.ignorePolicy
-      ? [
-          `Local ignore file: ${safeTerminalText(config.ignorePolicy.filename)}`,
-          ...ignorePublicationConsentLines(config),
-        ]
-      : []),
-    `Enabled modes: ${modes.join("; ")}`,
-    "Their usual baseline, remote selection, and ownership checks still apply. This does not allow work after the last Pi exits. A settings or rule-file change requires a new review.",
-  ];
-  if (origin === "retry")
-    lines.push(
-      "This approval is saved separately from the model retry. Sending conflict evidence again still requires its own confirmation.",
-    );
-  const content = lines.join("\n");
-  const accepted =
-    origin === "retry"
-      ? await execution.request("merge-review", {
-          title,
-          content,
-          confirmationLabel: "Approve automatic transfers",
-          summaryLines: lines,
-        })
-      : await execution.request("confirm", { title, message: content });
-  validate();
-  if (accepted !== true) {
-    execution.noteDebugOutcome?.("cancelled");
-    return false;
-  }
-  const latest = await loadConfigForCheck(undefined, execution.signal);
-  await config.validateIgnorePolicy?.();
-  validate();
-  if (syncCheckConfigFingerprint(latest) !== fingerprint)
-    throw new Error("Setup changed during automatic transfer review.");
-  const saved = consent.setups[config.setupName];
-  const automaticFingerprint = consentFingerprint(execution.root, config);
-  publishConsent({
-    ...consent,
-    setups: {
-      ...consent.setups,
-      [config.setupName]: {
-        ...saved,
-        fingerprint: saved?.fingerprint ?? automaticFingerprint,
-        afterExit: saved?.afterExit ?? false,
-        automaticFingerprint,
-      },
-    },
-  });
-  return true;
-}
-
 export async function captureAutomaticAuthorization(execution: Execution, expectedFingerprint?: string) {
   const consent = readConsent(execution.root);
   if (!consent) {
@@ -343,17 +224,9 @@ export async function captureAutomaticAuthorization(execution: Execution, expect
   const config = await loadConfigForCheck(undefined, execution.signal);
   validateParticipants();
   const fingerprint = syncCheckConfigFingerprint(config);
-  if (
-    expectedFingerprint !== undefined ? fingerprint !== expectedFingerprint : config.reservedIgnoreNames !== undefined
-  ) {
+  if (expectedFingerprint !== undefined && fingerprint !== expectedFingerprint) {
     execution.noteDebugOutcome?.("blocked");
     throw new Error("Settings changed before automatic work; use the reviewed foreground command.");
-  }
-  if (!automaticPolicyAuthorized(execution.root, config)) {
-    execution.noteDebugOutcome?.("blocked");
-    throw new Error(
-      "Automatic transfer requires separate approval for the current setup and policy. Run reviewed /sync first.",
-    );
   }
   const validate = (current?: AnySyncConfig) => {
     validateParticipants();
@@ -415,14 +288,8 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
   if (payload.afterExit && (!config.continuous || !config.agentMode))
     throw new Error("Enable the reviewed Autonomous and Continuous policies first.");
   const paths = (rules?: readonly string[]) => rules?.map(safeTerminalText).join(", ") || "none";
-  const selection = config.ignorePolicy
-    ? [
-        "Selected content: eligible files in the Pi agent directory",
-        `Local ignore file: ${safeTerminalText(config.ignorePolicy.filename)}`,
-        ...ignorePublicationConsentLines(config),
-        `Session opt-in: ${config.ignorePolicy.sessions ? "On — ignore rules still apply" : "Off"}`,
-      ].join("\n")
-    : config.scope === "agent-directory"
+  const selection =
+    config.scope === "agent-directory"
       ? [
           "Selected content: all eligible files in the Pi agent directory",
           `Excluded paths: ${paths(config.exclude)}`,
@@ -432,7 +299,7 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
       : `Selected content: ${paths(config.include)}`;
   const accepted = await execution.request("confirm", {
     title: payload.afterExit ? "Allow continuous sync after all Pi clients exit?" : "Revoke unattended sync?",
-    message: `Setup: ${safeTerminalText(config.setupName)}\n${selection}\nModel: ${safeTerminalText(facts?.model?.provider ?? "unavailable")}/${safeTerminalText(facts?.model?.id ?? "unavailable")}\n\n${payload.afterExit ? `The daemon may transfer selected private content and send conflict evidence to this independently available provider after Pi exits. Existing budgets, exclusions, journals, and stale-evidence checks still apply. No parent conversation or tools are sent. Changing this setup or model invalidates this permission.${config.reservedIgnoreNames !== undefined ? " This also approves the enabled automatic modes for this setup while Pi clients are attached." : ""}` : "The daemon may remain alive, but no new transfer or model request may start with zero clients."}`,
+    message: `Setup: ${safeTerminalText(config.setupName)}\n${selection}\nModel: ${safeTerminalText(facts?.model?.provider ?? "unavailable")}/${safeTerminalText(facts?.model?.id ?? "unavailable")}\n\n${payload.afterExit ? `The daemon may transfer selected private content and send conflict evidence to this independently available provider after Pi exits. Existing budgets, exclusions, journals, and stale-evidence checks still apply. No parent conversation or tools are sent. Changing this setup or model invalidates this permission.` : "The daemon may remain alive, but no new transfer or model request may start with zero clients."}`,
   });
   execution.validate();
   if (accepted !== true) {
@@ -441,7 +308,6 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
   }
   const latest = await loadConfigForCheck(undefined, execution.signal);
   execution.validate();
-  await config.validateIgnorePolicy?.();
   execution.validate();
   if (
     participantBinding(execution) !== peers ||
@@ -467,7 +333,6 @@ export async function authorizeAfterExit(execution: Execution, payload: unknown)
         sessionDir: facts?.sessionDir,
         cwd: facts?.cwd,
         afterExit: payload.afterExit,
-        ...(payload.afterExit && config.reservedIgnoreNames !== undefined ? { automaticFingerprint: fingerprint } : {}),
       },
     },
   } satisfies Consent);

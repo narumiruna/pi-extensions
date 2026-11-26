@@ -5,6 +5,7 @@ import { documentFingerprint } from "../../document.js";
 import { MAX_SETTINGS_BYTES } from "../../protocol.js";
 import { configFromSettings } from "../settings/config.js";
 import { legacyLocalConfigPath, localConfigPath } from "../settings/config-file.js";
+import { hasRetiredRuleJournal } from "../settings/retired-ignore-recovery.js";
 import { validateSettingsDocument } from "../settings/settings-validation.js";
 import { stateDirectoryMigrationNotice } from "../state/state-directory.js";
 import { statePathForConfig } from "../state/sync-state-store.js";
@@ -74,7 +75,7 @@ export function captureStartupBootstrap(
   reviewOwnsLock?: () => boolean,
 ): (() => boolean) | undefined {
   signal.throwIfAborted();
-  if (stateDirectoryMigrationNotice()) return;
+  if (stateDirectoryMigrationNotice() || hasRetiredRuleJournal(root)) return;
   const recovery = startupRecoveryEvidence(root, reviewOwnsLock);
   if (recovery === undefined) return;
   const consent = readConsent(root);
@@ -90,7 +91,6 @@ export function captureStartupBootstrap(
   const settings = validateSettingsDocument(parsed);
   if (!settings.activeSyncSetup) return;
   const config = configFromSettings(settings);
-  if (config.reservedIgnoreNames) return;
   const stateFile = statePathForConfig(config);
   const noMergeJournal = () => {
     const setupDirectory = inspect(path.dirname(stateFile));
@@ -102,6 +102,7 @@ export function captureStartupBootstrap(
     return (
       readCanonicalSettings()?.fingerprint === expected &&
       !stateDirectoryMigrationNotice() &&
+      !hasRetiredRuleJournal(root) &&
       JSON.stringify(readConsent(root)) === consentToken &&
       noMergeJournal() &&
       startupRecoveryEvidence(root, reviewOwnsLock) === recovery

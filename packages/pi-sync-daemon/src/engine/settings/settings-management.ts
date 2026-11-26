@@ -181,24 +181,18 @@ export async function updateSyncSetup(
 
 export async function removeSyncSetup(name: string, signal?: AbortSignal) {
   validateConfigName(name, "sync setup");
-  let removedLastIgnoreSetup = false;
-  const saved = await updateLocalConfig((settings) => {
-    const setup = settings.syncSetups[name];
-    if (!Object.hasOwn(settings.syncSetups, name) || !setup) throw new Error(`Sync setup not found: ${name}`);
+  await updateLocalConfig((settings) => {
+    if (!Object.hasOwn(settings.syncSetups, name)) throw new Error(`Sync setup not found: ${name}`);
     const isCurrent = settings.activeSyncSetup === name;
     if (isCurrent && Object.keys(settings.syncSetups).length > 1) {
       throw new Error("Switch to another sync setup before removing the current setup.");
     }
     const syncSetups = { ...settings.syncSetups };
     delete syncSetups[name];
-    removedLastIgnoreSetup =
-      setup.sync.pathPolicy === "ignore-file" &&
-      !Object.values(syncSetups).some((remaining) => remaining.sync.pathPolicy === "ignore-file");
     const next = { ...settings, syncSetups };
     if (isCurrent) delete next.activeSyncSetup;
     return next;
   }, signal);
-  return { revertedToLegacyOnly: removedLastIgnoreSetup && saved.activeSyncSetup !== undefined };
 }
 
 export async function removeStorageConnection(name: string, signal?: AbortSignal) {
@@ -223,7 +217,6 @@ function setupSettingsVersion(
   upgradeExclude?: boolean,
 ): PiSyncSettingsV3["version"] {
   if (setup.sync.maxFileSizeMiB !== undefined || setup.sync.maxDirectorySizeMiB !== undefined) return 9;
-  if (current < 8 && setup.sync.pathPolicy === "ignore-file") return 8;
   if (current < 7 && setup.sync.scope === "agent-directory") return 7;
   if (current < 6 && upgradeExclude) return 6;
   return current;

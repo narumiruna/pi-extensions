@@ -2,7 +2,7 @@
 
 ## Status
 
-Activation candidate. The contract below does not establish release readiness. Enable the production capability only with passing activation gates for the built Pi client and daemon. In-app rule-file saves are out of scope.
+Superseded by the removal of ignore-file policy. The proposal below is historical. See the [manual recovery guide](../../packages/pi-sync/skills/configure-pi-sync/references/configuration.md#retired-ignore-file-policy).
 
 ## Context
 

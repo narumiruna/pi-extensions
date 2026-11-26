@@ -66,6 +66,18 @@ async function fixture(run: (root: string) => Promise<void>) {
   }
 }
 
+test("CLI status explains a retired recovery blocker without starting a daemon or touching evidence", () =>
+  fixture(async (root) => {
+    const pending = path.join(root, ".pi-sync.json.syncignore-creation");
+    await fs.writeFile(pending, "original evidence\n", { mode: 0o600 });
+    const { stdout, stderr } = await exec(process.execPath, [cli, "status", "--root", root]);
+    const status = JSON.parse(stdout);
+    assert.equal(status.running, false);
+    assert.match(status.retiredPolicy, /recovery.*\/skill:configure-pi-sync/u);
+    assert.equal(stderr, "");
+    assert.equal(await fs.readFile(pending, "utf8"), "original evidence\n");
+  }));
+
 test("simultaneous first clients share a detached owner that survives launcher exit", () =>
   fixture(async (root) => {
     const first = exec(process.execPath, [cli, "start", "--root", root]);

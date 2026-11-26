@@ -1,11 +1,9 @@
-import { resolve } from "node:path";
-import { type ExtensionCommandContext, getAgentDir } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { readLocalConfigObject } from "../../settings/settings-store.js";
 import type { SyncPolicySettings } from "../../settings/settings-types.js";
 import { validateConfigName } from "../../settings/settings-validation.js";
 import { captureMutationOwner } from "../../sync/sync-local.js";
 import { DEFAULT_SYNC_INCLUDE } from "../../sync/sync-policy.js";
-import { ignoreFileSettingsAvailable } from "../ignore-file-ui.js";
 import { AUTOMATIC_SYNC_DESCRIPTION } from "../sync-behavior.js";
 import { safeTerminalText } from "../terminal-text.js";
 import {
@@ -29,29 +27,17 @@ export async function chooseSetupPolicy(
   ctx: ExtensionCommandContext,
   signal?: AbortSignal,
   { legacySessions = false } = {},
-): Promise<{ sync: SyncPolicySettings; lines: string[]; join: boolean | "read-only" } | undefined> {
+): Promise<{ sync: SyncPolicySettings; lines: string[]; join: boolean } | undefined> {
   const validate = captureMutationOwner(ctx, signal);
-  const ignoreAvailable = ctx.mode === "tui" && (await ignoreFileSettingsAvailable(ctx, signal));
-  if (signal?.aborted) return;
   validate();
-  const ignoreChoice = "Use .syncignore (recommended)";
-  const directoryChoice = ignoreAvailable ? "Agent directory · legacy rules" : "Agent directory (recommended)";
   const choice = await ctx.ui.select(
+    "Choose synced content\n\nRecommended Pi settings uses Selected paths to sync a fixed list of Pi settings and resources.\nAgent directory includes eligible current and future files unless excluded.\nTo join existing storage, use the same scope as its published snapshot.",
     [
-      "Choose synced content",
-      ignoreAvailable
-        ? "Use .syncignore to control eligible files in the Pi agent directory. Its rules stay on this device."
-        : "Agent directory (recommended): sync all eligible files, including custom paths, except sessions, bin, and npm.",
-      "Joining existing storage? Review its policy after saving. It will not be adopted automatically.",
-      "Legacy selected paths use a fixed list of included paths.",
-    ].join("\n\n"),
-    [
-      ...(ignoreAvailable ? [ignoreChoice] : []),
-      directoryChoice,
-      "Agent directory · edit starter rules",
-      "Join an existing remote",
       "Recommended Pi settings",
       "Minimal settings",
+      "Agent directory",
+      "Agent directory · edit starter rules",
+      "Join an existing remote",
       "Cancel",
     ],
     { signal },
@@ -61,8 +47,7 @@ export async function chooseSetupPolicy(
   const join = choice === "Join an existing remote";
   if (
     !join &&
-    !(ignoreAvailable && choice === ignoreChoice) &&
-    choice !== directoryChoice &&
+    choice !== "Agent directory" &&
     choice !== "Agent directory · edit starter rules" &&
     choice !== "Recommended Pi settings" &&
     choice !== "Minimal settings"
@@ -71,34 +56,15 @@ export async function chooseSetupPolicy(
   const joinScope = join
     ? await ctx.ui.select(
         "Choose the existing remote's scope\n\nUse Selected paths for an older setup with an include list. These choices do not change the remote's scope.",
-        [...(ignoreAvailable ? [ignoreChoice] : []), "Pi agent directory", "Selected paths (legacy)", "Cancel"],
+        ["Pi agent directory", "Selected paths", "Cancel"],
         { signal },
       )
     : undefined;
-  const usesIgnore = ignoreAvailable && (choice === ignoreChoice || joinScope === ignoreChoice);
-  if (
-    signal?.aborted ||
-    (join && !usesIgnore && joinScope !== "Pi agent directory" && joinScope !== "Selected paths (legacy)")
-  )
+  if (signal?.aborted || (join && joinScope !== "Pi agent directory" && joinScope !== "Selected paths"))
     return undefined;
   validate();
-  if (usesIgnore) {
-    const sessions = join ? false : await chooseSessions(ctx, signal);
-    if (signal?.aborted || sessions === undefined) return;
-    validate();
-    return {
-      sync: { scope: "agent-directory", pathPolicy: "ignore-file", sessions, automatic: false },
-      lines: [
-        `Local ignore file: ${safeTerminalText(resolve(getAgentDir(), ".syncignore"))}`,
-        "An existing valid file is reused as-is. If the daemon cannot create it safely, create it manually with the starter line /sessions/, then retry setup. Do not overwrite an existing file.",
-        `Sessions: ${sessions ? "opted in — ignore rules still apply" : "Off"}`,
-        "Rules are local only. Compare policy before transferring to existing storage. Peers must support ignore-file snapshots before the first push.",
-      ],
-      join: join ? "read-only" : false,
-    };
-  }
   const legacy =
-    choice === "Recommended Pi settings" || choice === "Minimal settings" || joinScope === "Selected paths (legacy)";
+    choice === "Recommended Pi settings" || choice === "Minimal settings" || joinScope === "Selected paths";
   const draft = starterDirectoryRules();
   const editRules = choice === "Agent directory · edit starter rules";
   if (editRules) {
@@ -147,7 +113,7 @@ export async function finishSetup(
   ctx: ExtensionCommandContext,
   name: string,
   message: string,
-  join: boolean | "read-only",
+  join: boolean,
   signal?: AbortSignal,
 ) {
   if (signal?.aborted) return;
@@ -155,10 +121,7 @@ export async function finishSetup(
   if (!join) return;
   const { showRemoteSelectionReview } = await import("../remote-selection-ui.js");
   if (signal?.aborted) return;
-  await showRemoteSelectionReview(ctx, name, signal, undefined, {
-    origin: "settings",
-    ...(join === "read-only" ? { readOnly: true } : {}),
-  });
+  await showRemoteSelectionReview(ctx, name, signal, undefined, { origin: "settings" });
 }
 
 export async function chooseAutomaticSync(ctx: ExtensionCommandContext, signal?: AbortSignal) {

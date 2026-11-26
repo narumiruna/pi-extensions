@@ -42,7 +42,7 @@ function startupFacts(root: string): ClientFacts {
   };
 }
 
-test.each(["startup-transfer", "shutdown", "daemon.authorize", "daemon.authorize-connected"])(
+test.each(["startup-transfer", "shutdown", "daemon.authorize"])(
   "startup defers to a held review fenced by participant generation (%s)",
   async (operation) => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pi-sync-startup-ready-")));

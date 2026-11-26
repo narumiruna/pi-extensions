@@ -35,7 +35,7 @@ export type ExpectedRemoteHead = { kind: "missing" } | { kind: "revision"; revis
 
 export interface PublishSnapshotOptions {
   signal?: AbortSignal;
-  validateIgnorePolicy?: () => Promise<void>;
+  validatePublication?: () => Promise<void>;
   preservePreviousHead?: boolean;
   /** Called at the backend's active-head commit boundary. */
   onCommit?: () => void;

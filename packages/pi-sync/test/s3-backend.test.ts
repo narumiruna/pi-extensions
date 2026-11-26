@@ -71,7 +71,7 @@ test("S3 factory exposes a stable secret-free identity, conditional capability, 
   );
 });
 
-test("S3 loopback preserves an existing head when ignore policy changes at publication", async () => {
+test("S3 loopback preserves an existing head when review evidence changes at publication", async () => {
   const objects = new Map<string, { body: Buffer; etag: string }>();
   const server = await startS3TestServer((request, response) => {
     const current = objects.get(request.path);
@@ -103,12 +103,12 @@ test("S3 loopback preserves an existing head when ignore policy changes at publi
     const next: Snapshot = {
       ...legacy,
       id: "ignore-activation",
-      version: 6,
-      selection: { version: 4, scope: "agent-directory", sessions: false, fingerprint: "a".repeat(64) },
+      version: 5,
+      selection: { version: 3, scope: "agent-directory", include: [], exclude: [], reinclude: [] },
     };
     await assert.rejects(
       backend.publishSnapshot(next, expectedRemoteHead(first.head), {
-        validateIgnorePolicy: async () => {
+        validatePublication: async () => {
           if (
             server.requests.some(({ method, path }) => method === "PUT" && path.endsWith("/ignore-activation.json.gz"))
           ) {

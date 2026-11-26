@@ -136,7 +136,10 @@ for (const scenario of cases) {
           reads++;
           return scenario.missingRemote ? undefined : (scenario.remote ?? head);
         },
-        readSnapshot: forbidden,
+        readSnapshot: async () => {
+          if (scenario.selection !== "legacy") return forbidden();
+          return { ...snapshot([]), id: scenario.remote?.snapshotId ?? head.snapshotId };
+        },
         publishSnapshot: forbidden,
         listHistory: forbidden,
         diagnose: forbidden,

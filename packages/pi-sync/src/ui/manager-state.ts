@@ -38,8 +38,6 @@ export interface ManagerDescription {
   title: string;
   actions: string[];
   configReview?: { setupName: string; fingerprint: string };
-  recoveryPull?: true;
-  settingsReview?: { setupName: string; fingerprint: string };
   operation?: OperationAvailability;
   attention?: SyncAttentionState;
   observation?: StartupObservation;
@@ -52,7 +50,6 @@ export async function describeManagerState(
   attention?: SyncAttentionState,
   inspectOperation: () => Promise<OperationAvailability> = inspectOperationAvailability,
   observation?: StartupObservation,
-  canUseIgnoreSettings?: () => Promise<boolean>,
 ): Promise<ManagerDescription> {
   signal?.throwIfAborted();
   let document: LocalConfigDocument | undefined;
@@ -71,7 +68,7 @@ export async function describeManagerState(
         `Error: ${safeTerminalText(errorMessage(error))}`,
         ...(document ? [`File: ${safeTerminalText(document.path)}`] : []),
         "",
-        "Repair the JSON file, then reopen /sync.",
+        "Resolve the settings error, then reopen /sync.",
       ].join("\n"),
       actions: ["Help"],
     };
@@ -95,12 +92,7 @@ export async function describeManagerState(
       actions: ["Sync setups…", "Storage connections…", "Help"],
     };
   }
-  let settingsConfig: AnySyncConfig | undefined;
   try {
-    settingsConfig = view.metadata();
-    if (settingsConfig.reservedIgnoreNames && canUseIgnoreSettings && !(await canUseIgnoreSettings())) {
-      throw new Error("the connected daemon does not support ignore-file setups");
-    }
     signal?.throwIfAborted();
     const config = await view.observe(undefined, signal);
     signal?.throwIfAborted();
@@ -159,16 +151,7 @@ export async function describeManagerState(
       "Manage sync",
       `Current sync setup: ${safeTerminalText(config.setupName)}`,
       `Storage: ${backendStorageDescription(config)}`,
-      ...(config.pathPolicy === "ignore-file"
-        ? [
-            `Sync scope: Pi agent directory · ignore file: ${safeTerminalText(config.ignoreFile ?? ".syncignore")}`,
-            ...(config.ignorePolicy?.matches(config.ignorePolicy.filename) === false
-              ? ["New snapshots include this rule file and its comments in remote history."]
-              : []),
-          ]
-        : config.scope
-          ? ["Sync scope: Pi agent directory, with exclusions"]
-          : []),
+      ...(config.scope ? ["Sync scope: Pi agent directory, with exclusions"] : []),
       ...(syncState?.unresolved?.length
         ? [`Unresolved: ${syncState.unresolved.length} dependency groups · review needed`]
         : []),
@@ -177,15 +160,13 @@ export async function describeManagerState(
             currentAttention.decision.setupName === config.setupName
               ? "Sync status: Review needed"
               : `Sync status: Review needed for setup ${safeTerminalText(currentAttention.decision.setupName)}`,
-            currentAttention.decision.ignorePolicyComparison
-              ? "Ignore-file policies differ."
-              : attentionDirectoryPolicy
-                ? "Sync scopes or directory rules differ."
-                : attentionComparison?.remoteOnly.length === 0 && attentionComparison.localOnly.length === 0
-                  ? attentionExclusionsDiffer
-                    ? "Synced-content exclusion rules differ."
-                    : "Only the synced-content order differs."
-                  : `Remote-only paths: ${attentionComparison?.remoteOnly.length ?? 0} · Device-only paths: ${attentionComparison?.localOnly.length ?? 0}${attentionExclusionsDiffer ? " · Exclusion rules differ." : ""}`,
+            attentionDirectoryPolicy
+              ? "Sync scopes or directory rules differ."
+              : attentionComparison?.remoteOnly.length === 0 && attentionComparison.localOnly.length === 0
+                ? attentionExclusionsDiffer
+                  ? "Synced-content exclusion rules differ."
+                  : "Only the synced-content order differs."
+                : `Remote-only paths: ${attentionComparison?.remoteOnly.length ?? 0} · Device-only paths: ${attentionComparison?.localOnly.length ?? 0}${attentionExclusionsDiffer ? " · Exclusion rules differ." : ""}`,
           ]
         : currentObservation
           ? [`Observed ${safeTerminalText(currentObservation.checkedAt)}: ${observationSummary(currentObservation)}`]
@@ -205,7 +186,6 @@ export async function describeManagerState(
       title: (changesBlocked ? ["Manage sync", ...operationStatusLines(operation)] : ordinaryTitle).join("\n"),
       actions: operationActions(operation, noSyncedContent, canSwitch, mainActions),
       configReview: { setupName: config.setupName, fingerprint: syncCheckConfigFingerprint(config) },
-      settingsReview: { setupName: settingsConfig.setupName, fingerprint: syncCheckConfigFingerprint(settingsConfig) },
       operation,
       ...(currentObservation ? { observation: currentObservation } : {}),
       ...(currentAttention
@@ -218,20 +198,6 @@ export async function describeManagerState(
     };
   } catch (error) {
     signal?.throwIfAborted();
-    if (settingsConfig?.reservedIgnoreNames !== undefined) {
-      return {
-        title: [
-          "Manage sync",
-          `Current sync setup: ${safeTerminalText(settingsConfig.setupName)}`,
-          `Transfers are unavailable: ${safeTerminalText(errorMessage(error))}`,
-        ].join("\n"),
-        actions: ["Settings", "Sync setups…", "Storage connections…", "Help"],
-        settingsReview: {
-          setupName: settingsConfig.setupName,
-          fingerprint: syncCheckConfigFingerprint(settingsConfig),
-        },
-      };
-    }
     return {
       title: [
         "Manage sync",
