@@ -37,6 +37,7 @@ export async function inspectDaemonStatus(root: string, signal?: AbortSignal) {
       ...(build.buildVersion && { buildVersion: build.buildVersion }),
       ...(build.buildId && { buildId: build.buildId }),
       buildComparison: compareBuild(build),
+      ...(build.upgradeStop && { guardedUpgrade: true }),
       lifecycleLog: path.join(paths.directory, "lifecycle.log"),
     };
   } catch {

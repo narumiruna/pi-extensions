@@ -91,7 +91,7 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
               await client.setBusy("command", true, requiresContact);
               busyPublished = requiresContact;
               if (signal.aborted || owner !== client) return;
-              await check.stop();
+              if (!daemonStatus) await check.stop();
               if (signal.aborted || owner !== client) return;
               if (
                 ready === false &&

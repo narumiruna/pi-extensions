@@ -22,6 +22,7 @@ import {
   readJsonBody,
   readUpgradeOwner,
   runtimePaths,
+  type UpgradeOwner,
 } from "./identity.js";
 import { createIdleExit, type IdleExitPolicy } from "./idle-exit.js";
 import { withCleanup } from "./lifecycle.js";
@@ -107,6 +108,7 @@ export interface ServerHooks {
   lifetime?(): Promise<IdleExitPolicy>;
   quiesce?(): Promise<void>;
   foregroundRecoveryAllowed?(): boolean;
+  upgradeAllowed?(): boolean;
   stopped?(): void;
   failure?(): void;
   diagnostic?: DaemonDiagnosticSink;
@@ -720,6 +722,45 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     });
     return { stopping: true };
   }
+  function upgradeBlocker() {
+    if (
+      ledger.failed ||
+      foregroundRecoveryJob ||
+      consentPublicationFailed ||
+      hooks.upgradeAllowed?.() === false ||
+      [...participants.values()].some((peer) => peer.resumeUnsafe)
+    )
+      return "repair";
+    if (
+      peerOperations.size ||
+      expiring ||
+      backgroundJobs.size ||
+      pending.size ||
+      [...jobs.values()].some(({ view }) => view.phase === "queued" || view.phase === "running")
+    )
+      return "busy";
+    if ([...participants.values()].some((peer) => peer.reservations?.size)) return "repair";
+  }
+  async function stopForUpgrade(params: unknown, signal?: AbortSignal) {
+    if (!record(params) || Object.keys(params).length !== 0) throw new Error("Invalid upgrade stop request.");
+    const checkBarrier = (barrier: UpgradeOwner | undefined) => {
+      signal?.throwIfAborted();
+      assertOwner();
+      if (barrier?.purpose || barrier?.instance !== identity.instance || barrier.pid !== identity.pid || !ownsLog())
+        throw new Error("Daemon owner or upgrade record changed; no stop was accepted.");
+    };
+    checkBarrier(await readUpgradeOwner(paths));
+    const deferred = upgradeBlocker();
+    if (deferred) return { deferred };
+    return admission.run(async () => {
+      checkBarrier(await readUpgradeOwner(paths));
+      const deferred = upgradeBlocker();
+      if (deferred) return { deferred };
+      if (Object.values(readConsent(paths.root)?.setups ?? {}).some((setup) => setup.afterExit))
+        return { deferred: "unattended" };
+      return stop();
+    }, signal);
+  }
   async function stopForeground(params: Record<string, unknown>, signal?: AbortSignal) {
     if (params.check !== undefined && params.check !== true) throw new Error("Invalid foreground stop request.");
     const barrier = await readUpgradeOwner(paths);
@@ -783,10 +824,12 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         version: PROTOCOL_VERSION,
         buildVersion: DAEMON_BUILD_VERSION,
         ...(DAEMON_BUILD_ID && { buildId: DAEMON_BUILD_ID }),
+        upgradeStop: 1,
         root: identity.root,
         instance: identity.instance,
         pid: identity.pid,
       };
+    if (method === "upgrade-stop") return stopForUpgrade(params, signal);
     if (method === "attach") {
       const attached = await admission.run(async () => {
         assertOwner();
@@ -1067,7 +1110,11 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         respond(response, 403, { error: { name: "Error", message: "Invalid daemon identity or protocol." } });
         return;
       }
-      if (["attach", "resume-contact", "startup.bootstrap", "state-wait", "foreground-stop"].includes(body.method)) {
+      if (
+        ["attach", "resume-contact", "startup.bootstrap", "state-wait", "foreground-stop", "upgrade-stop"].includes(
+          body.method,
+        )
+      ) {
         admissionController = new AbortController();
         response.once("close", disconnect);
         if (response.destroyed) disconnect();

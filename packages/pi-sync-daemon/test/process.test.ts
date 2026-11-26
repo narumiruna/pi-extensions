@@ -135,6 +135,16 @@ test("status, stop, and repair-upgrade never start an absent daemon", () =>
     assert.deepEqual(await fs.readdir(root), []);
   }));
 
+test("a child from the wrong build cannot publish an identity for a stale launcher", () =>
+  fixture(async (root) => {
+    await assert.rejects(
+      exec(process.execPath, [cli, "serve", "--root", root, "--expect-build", DAEMON_BUILD_VERSION, "0".repeat(64)]),
+    );
+    const { stdout } = await exec(process.execPath, [cli, "status", "--root", root]);
+    assert.equal(JSON.parse(stdout).running, false);
+    await assert.rejects(fs.stat((await runtimePaths(root)).directory), { code: "ENOENT" });
+  }));
+
 test("restart and startup use the same lock and restart waits for the old owner to exit", () =>
   fixture(async (root) => {
     const old = await ensureDaemon(root);

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { setTimeout as delay } from "node:timers/promises";
+import { DAEMON_BUILD_ID, DAEMON_BUILD_VERSION } from "./build-version.js";
 import { requestDaemon } from "./client-transport.js";
-import { ensureDaemon, restartDaemon } from "./daemon-startup.js";
+import { DaemonUpgradeBlockedError, ensureDaemon, restartDaemon } from "./daemon-startup.js";
 import { inspectDaemonStatus } from "./daemon-status.js";
 import { privateDirectory, readIdentity, runtimePaths } from "./identity.js";
 import { openLifecycleLog } from "./lifecycle-log.js";
@@ -14,11 +15,12 @@ export async function main(args: readonly string[]) {
     );
     return;
   }
+  const expectedBuild = command === "serve" && extra[0] === "--expect-build" && extra.length === 3;
   if (
     !["start", "status", "stop", "restart", "repair-upgrade", "serve"].includes(command) ||
     flag !== "--root" ||
     !root ||
-    extra.length
+    (extra.length && !expectedBuild)
   )
     throw new Error("Use pi-sync-daemon --help for the supported commands.");
   if (command === "repair-upgrade") {
@@ -27,7 +29,8 @@ export async function main(args: readonly string[]) {
     return;
   }
   if (command === "serve") {
-    process.send?.({ type: "booting" });
+    if (expectedBuild && (extra[1] !== DAEMON_BUILD_VERSION || extra[2] !== (DAEMON_BUILD_ID ?? "")))
+      throw new Error("Installed daemon build does not match the launch request.");
     const { createEngineService } = await import("./engine-service.js");
     const { startServer } = await import("./server.js");
     const paths = await runtimePaths(root);
@@ -111,18 +114,20 @@ export async function main(args: readonly string[]) {
   console.log(JSON.stringify({ stopped: true, root: paths.root }));
 }
 if (import.meta.main) {
-  void main(process.argv.slice(2)).catch(() => {
+  void main(process.argv.slice(2)).catch((error: unknown) => {
     process.send?.({
       type: "error",
       message:
         "Daemon initialization failed; private state retained. Check endpoint ownership and compatible versions.",
     });
     console.error(
-      process.argv[2] === "repair-upgrade"
-        ? "Pi Sync upgrade repair failed. Check the pending PID, wait for confirmed exit, and check consent storage. Do not delete recovery files."
-        : process.argv[2] === "restart"
-          ? "Pi Sync restart failed; private state retained. Check status, version compatibility, and retained unattended permission. Do not force a restart."
-          : "pi-sync-daemon failed; private state retained. Check root, endpoint ownership, and version compatibility.",
+      error instanceof DaemonUpgradeBlockedError
+        ? error.message
+        : process.argv[2] === "repair-upgrade"
+          ? "Pi Sync upgrade repair failed. Check the pending PID, wait for confirmed exit, and check consent storage. Do not delete recovery files."
+          : process.argv[2] === "restart"
+            ? "Pi Sync restart failed; private state retained. Check status, version compatibility, and retained unattended permission. Do not force a restart."
+            : "pi-sync-daemon failed; private state retained. Check root, endpoint ownership, and version compatibility.",
     );
     process.exitCode = 1;
   });

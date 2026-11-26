@@ -13,6 +13,7 @@ export {
   inspectDaemonRecovery,
   stopDaemonForRecovery,
 } from "./daemon-recovery.js";
+export { DaemonUpgradeBlockedError } from "./daemon-startup.js";
 export { inspectDaemonStatus } from "./daemon-status.js";
 export type { DocumentView } from "./document.js";
 export { documentFingerprint } from "./document.js";

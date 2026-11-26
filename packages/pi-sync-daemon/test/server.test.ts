@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { test, vi } from "vitest";
-import { DAEMON_BUILD_VERSION } from "../src/build-version.js";
+import { DAEMON_BUILD_ID, DAEMON_BUILD_VERSION } from "../src/build-version.js";
 import { DaemonError, requestDaemon } from "../src/client.js";
 import { daemonPaths, privateDirectory, readIdentity, runtimePaths } from "../src/identity.js";
 import { type ClientFacts, type Execute, type JobView, operationPrefix, type PollReply } from "../src/protocol.js";
@@ -145,6 +145,8 @@ test("root-bound local handshake rejects a second live daemon and authenticates 
       assert.deepEqual(await requestDaemon(server.paths, server.identity, "hello", {}), {
         version: 1,
         buildVersion: DAEMON_BUILD_VERSION,
+        ...(DAEMON_BUILD_ID && { buildId: DAEMON_BUILD_ID }),
+        upgradeStop: 1,
         root,
         instance: server.identity.instance,
         pid: process.pid,

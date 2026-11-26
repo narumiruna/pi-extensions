@@ -278,7 +278,7 @@ test("no external connection caller can bypass a directional recovery's compatib
       await running;
     }
     assert.equal(await running, verified);
-    assert.equal((await f.client.verifyConnection()).identity.instance, replacement.identity.instance);
+    assert.equal((await f.client.verifyConnection())?.identity.instance, replacement.identity.instance);
     assert.equal(transport.ensure.mock.calls.length, 2);
     assert.equal(original.run.mock.calls.length, 1);
     assert.equal(original.recoverForeground.mock.calls[0]?.[0], "verified-job");

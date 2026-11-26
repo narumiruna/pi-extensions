@@ -78,5 +78,10 @@ export async function hello(paths: RuntimePaths, identity: Identity, signal?: Ab
     throw new Error("Invalid daemon build version.");
   const buildId = value.buildId;
   if (buildId !== undefined && !isDaemonBuildId(buildId)) throw new Error("Invalid daemon build identifier.");
-  return { buildVersion, buildId, needsUpgrade: buildVersion === undefined || lt(buildVersion, DAEMON_BUILD_VERSION) };
+  return {
+    buildVersion,
+    buildId,
+    upgradeStop: value.upgradeStop === 1,
+    needsUpgrade: buildVersion === undefined || lt(buildVersion, DAEMON_BUILD_VERSION),
+  };
 }

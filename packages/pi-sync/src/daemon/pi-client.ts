@@ -12,6 +12,7 @@ import {
   DaemonConnection,
   DaemonError,
   type DaemonRecoveryTarget,
+  DaemonUpgradeBlockedError,
   type DocumentView,
   documentFingerprint,
   ensureDaemon,
@@ -52,7 +53,9 @@ import { createQueueReleaseUI, type QueueReleaseEvent } from "./queue-release-ui
 import { quarantineClient, recoverDetachedClients } from "./recovery.js";
 import { requestStartupBootstrap } from "./startup-bootstrap-client.js";
 
-type DaemonAddress = Pick<Awaited<ReturnType<typeof ensureDaemon>>, "paths" | "identity" | "needsUpgrade">;
+type DaemonAddress = Pick<Awaited<ReturnType<typeof ensureDaemon>>, "paths" | "identity" | "needsUpgrade"> & {
+  upgradeStop?: boolean;
+};
 
 const scope = new AsyncLocalStorage<{ client: PiDaemonClient; reload?: AbortController }>();
 const clients = new WeakMap<ExtensionContext["sessionManager"], PiDaemonClient>();
@@ -240,7 +243,7 @@ function remoteErrorNamed(error: unknown, name: string) {
 export class PiDaemonClient {
   private connection?: DaemonConnection;
   private protectionOnly = false;
-  private blockedUpgrade?: { instance: string; reason: string };
+  private blockedUpgrade?: { instance: string; reason: string; error?: unknown };
   private partialConnection?: DaemonConnection;
   private work = Promise.resolve();
   private factsQueue = Promise.resolve();
@@ -418,8 +421,12 @@ export class PiDaemonClient {
         return true;
       } catch (error) {
         this.validate();
-        if (this.paused || this.recoveringDirectionalOwner) throw error;
+        if (this.paused || this.recoveringDirectionalOwner || error instanceof DaemonUpgradeBlockedError) throw error;
         upgradeFailure = safeTerminalText(errorMessage(error));
+        if (address.upgradeStop) {
+          this.blockedUpgrade = { instance: address.identity.instance, reason: upgradeFailure, error };
+          throw error;
+        }
       }
     }
     try {
@@ -466,6 +473,7 @@ export class PiDaemonClient {
       startupSignal.throwIfAborted();
     };
     validateStartup();
+    if (!existing && this.blockedUpgrade?.error !== undefined) throw this.blockedUpgrade.error;
     if (this.connection) {
       if (!existing && this.protectionOnly)
         throw new Error(
@@ -580,6 +588,8 @@ export class PiDaemonClient {
       },
       (error: unknown) => {
         this.connecting = undefined;
+        if (error instanceof DaemonUpgradeBlockedError && !startupSignal.aborted && this.ownsContactUI())
+          this.blockedUpgrade = { instance: error.instance, reason: error.message, error };
         const outcome = startupSignal.aborted
           ? "cancelled"
           : existing && remoteErrorNamed(error, "DaemonStoppingError")
@@ -752,9 +762,11 @@ export class PiDaemonClient {
     this.clearRestoredContact();
   }
   async verifyConnection(signal?: AbortSignal) {
-    const connection = await this.connect(undefined, signal);
-    this.validateFactsScope(connection, signal);
+    this.validateFactsScope(undefined, signal);
     this.assertNoDirectionalRecovery();
+    const connection = this.connection;
+    if (!connection) return;
+    if (this.protectionOnly) throw new Error("This session is only protecting its files on an older Pi Sync daemon.");
     await this.publishFacts(connection, signal);
     this.validateFactsScope(connection, signal);
     this.assertNoDirectionalRecovery();

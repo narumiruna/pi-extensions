@@ -73,7 +73,7 @@ async function listenOlderDaemon({ paths, owner }: Awaited<ReturnType<typeof fix
     if (input.version === version && input.root === root && input.instance === instance && input.token === token) {
       if (input.method === "hello") {
         hello();
-        response.end(JSON.stringify({ result: { version, root, instance, pid } }));
+        response.end(JSON.stringify({ result: { version, root, instance, pid, upgradeStop: 1 } }));
       } else {
         // Force a safe failure after the barrier would have been published.
         response.end(JSON.stringify({ result: { stopping: false } }));
@@ -216,7 +216,7 @@ test.runIf(process.platform === "linux")(
     const saved = await fs.readFile(owner.file, "utf8");
     assert.equal(JSON.parse(saved).birth, birth);
     assert.equal(Object.hasOwn(JSON.parse(saved), "token"), false);
-    await assert.rejects(ensureDaemon(owner.paths.root), /could not replace the daemon safely/u);
+    await assert.rejects(ensureDaemon(owner.paths.root), /process changed during authentication/u);
     assert.equal(await fs.readFile(owner.file, "utf8"), saved);
   },
 );
