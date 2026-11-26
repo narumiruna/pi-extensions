@@ -49,6 +49,8 @@ export interface LoadedGoalState {
 }
 
 interface SessionEntry {
+  id?: string;
+  parentId?: string | null;
   type?: string;
   customType?: string;
   data?: unknown;
@@ -67,16 +69,77 @@ export function serializeGoalState(goal: ActiveGoal | undefined): GoalStateEntry
 }
 
 export function loadGoalStateFromSession(ctx: SessionContext): LoadedGoalState {
-  const entries = ctx.sessionManager?.getBranch?.() ?? ctx.sessionManager?.getEntries?.() ?? [];
-  const canonicalEntry = entries
-    .filter((entry) => entry.type === "custom" && entry.customType === GOAL_STATE_ENTRY_TYPE)
-    .pop();
-  if (canonicalEntry) return loadCanonicalGoalState(canonicalEntry.data);
+  const branch = ctx.sessionManager?.getBranch?.();
+  const entries = branch ?? ctx.sessionManager?.getEntries?.() ?? [];
+  const canonicalEntry = entries.findLast(isCanonicalEntry);
+  if (canonicalEntry) {
+    return loadCanonicalGoalState(
+      resolveCheckpointObjective(canonicalEntry.data, () => branch ?? ancestorsOf(entries, canonicalEntry)),
+    );
+  }
 
   const legacyEntry = entries
     .filter((entry) => entry.type === "custom" && entry.customType === LEGACY_GOALS_STATE_ENTRY_TYPE)
     .pop();
   return legacyEntry ? loadLegacyGoalsState(legacyEntry.data) : emptyGoalState();
+}
+
+function isCanonicalEntry(entry: SessionEntry): boolean {
+  return entry.type === "custom" && entry.customType === GOAL_STATE_ENTRY_TYPE;
+}
+
+function resolveCheckpointObjective(data: unknown, getLineage: () => readonly SessionEntry[]): unknown {
+  if (!isRecord(data) || !Object.hasOwn(data, "objectiveEntryId")) return data;
+  if (isRecord(data.goal) && Object.hasOwn(data.goal, "text")) return data;
+  const checkpoint = compactCheckpoint(data);
+  if (!checkpoint) return undefined;
+  const text = referencedObjective(getLineage(), checkpoint.objectiveEntryId, checkpoint.goal.id);
+  return text === undefined ? undefined : { ...data, goal: { ...checkpoint.goal, text } };
+}
+
+function compactCheckpoint(data: unknown) {
+  if (!isRecord(data) || typeof data.objectiveEntryId !== "string" || !data.objectiveEntryId) return undefined;
+  const goal = data.goal;
+  if (!isRecord(goal) || Object.hasOwn(goal, "text") || !hasStoredGoalFields(goal)) return undefined;
+  return { goal, objectiveEntryId: data.objectiveEntryId };
+}
+
+function referencedObjective(lineage: readonly SessionEntry[], sourceId: string, goalId: string): string | undefined {
+  for (let index = lineage.length - 1; index >= 0; index -= 1) {
+    const entry = lineage[index];
+    if (!entry) continue;
+    if (entry.id === sourceId) {
+      if (!isCanonicalEntry(entry) || lineage.findIndex((candidate) => candidate.id === sourceId) !== index) {
+        return undefined;
+      }
+      const data = entry.data;
+      const source = isRecord(data) && !Object.hasOwn(data, "objectiveEntryId") ? data.goal : undefined;
+      return isStoredGoal(source) && source.id === goalId ? source.text : undefined;
+    }
+    if (!isCanonicalEntry(entry)) continue;
+    const checkpoint = compactCheckpoint(entry.data);
+    if (checkpoint?.objectiveEntryId !== sourceId || checkpoint.goal.id !== goalId) return undefined;
+  }
+  return undefined;
+}
+
+function ancestorsOf(entries: readonly SessionEntry[], leaf: SessionEntry): SessionEntry[] {
+  const indexById = new Map<string, number | null>();
+  for (const [index, entry] of entries.entries()) {
+    if (entry.id !== undefined) indexById.set(entry.id, indexById.has(entry.id) ? null : index);
+  }
+  const lineage: SessionEntry[] = [];
+  for (let index = entries.lastIndexOf(leaf); index >= 0; ) {
+    const entry = entries[index];
+    if (!entry) return [];
+    lineage.push(entry);
+    if (typeof entry.parentId !== "string") break;
+    const parent = indexById.get(entry.parentId);
+    if (parent === undefined) break;
+    if (parent === null || parent >= index) return [];
+    index = parent;
+  }
+  return lineage.reverse();
 }
 
 function loadCanonicalGoalState(data: unknown): LoadedGoalState {
@@ -216,15 +279,16 @@ function readState(): Record<string, unknown> {
 }
 
 function isStoredGoal(value: unknown): value is LegacyStoredGoal {
-  if (!isRecord(value)) return false;
+  return isRecord(value) && validObjective(value.text) && hasStoredGoalFields(value);
+}
+
+function hasStoredGoalFields(value: Record<string, unknown>): value is Record<string, unknown> & { id: string } {
   return (
     typeof value.id === "string" &&
     Boolean(value.id) &&
     value.id === value.id.trim() &&
-    validObjective(value.text) &&
-    ["active", "queued", "paused", "blocked", "usage_limited", "budget_limited", "complete"].includes(
-      String(value.status),
-    ) &&
+    typeof value.status === "string" &&
+    ["active", "queued", "paused", "blocked", "usage_limited", "budget_limited", "complete"].includes(value.status) &&
     typeof value.startedAt === "number" &&
     typeof value.updatedAt === "number" &&
     typeof value.iteration === "number" &&
