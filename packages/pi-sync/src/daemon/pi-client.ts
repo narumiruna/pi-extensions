@@ -20,6 +20,7 @@ import {
   MAX_SETTINGS_BYTES,
   modelSignature,
   OWNERSHIP_CLEANUP_REQUIRED,
+  requestDaemon,
   waitForDaemonExit,
 } from "@narumitw/pi-sync-daemon";
 import { appendDebugEvent, type DebugEvent } from "@narumitw/pi-sync-daemon/engine/debug-log";
@@ -421,7 +422,7 @@ export class PiDaemonClient {
         return true;
       } catch (error) {
         this.validate();
-        if (this.paused || this.recoveringDirectionalOwner || error instanceof DaemonUpgradeBlockedError) throw error;
+        if (this.paused || this.recoveringDirectionalOwner || this.blockedUpgrade?.error !== undefined) throw error;
         upgradeFailure = safeTerminalText(errorMessage(error));
         if (address.upgradeStop) {
           this.blockedUpgrade = { instance: address.identity.instance, reason: upgradeFailure, error };
@@ -466,6 +467,36 @@ export class PiDaemonClient {
     this.assertNoDirectionalRecovery();
     return this.attachConnection(existing, requestSignal);
   }
+  private async ensureWithSessionProtection(signal: AbortSignal, validate: () => void) {
+    try {
+      return await ensureDaemon(this.root, signal);
+    } catch (error) {
+      if (!(error instanceof DaemonUpgradeBlockedError)) throw error;
+      validate();
+      if (this.paused || this.recoveringDirectionalOwner) throw error;
+      this.blockedUpgrade = { instance: error.instance, reason: error.message, error };
+      try {
+        const address = await findDaemon(this.root, signal);
+        validate();
+        if (this.paused || this.recoveringDirectionalOwner) throw error;
+        if (address?.identity.instance !== error.instance || address.paths.root !== this.root || !address.needsUpgrade)
+          throw error;
+        if (!address.upgradeStop) return { ...address, replacedOwner: false };
+        const facts = this.facts(true);
+        if (facts.sessionFile) {
+          const result = await requestDaemon(address.paths, address.identity, "protect-session", facts, signal);
+          validate();
+          if (!result || typeof result !== "object" || !("protected" in result) || result.protected !== true)
+            throw new Error("Daemon did not acknowledge session-file protection.");
+        }
+      } catch (cause) {
+        validate();
+        if (cause === error) throw error;
+        throw new Error(`${error.message} Session-file protection could not be confirmed.`, { cause });
+      }
+      throw error;
+    }
+  }
   private async attachConnection(existing?: DaemonAddress, requestSignal?: AbortSignal) {
     const startupSignal = requestSignal ? AbortSignal.any([this.signal, requestSignal]) : this.signal;
     const validateStartup = () => {
@@ -500,7 +531,7 @@ export class PiDaemonClient {
         validateStartup();
         const daemon = existing
           ? { ...existing, replacedOwner: false, buildVersion: undefined }
-          : await ensureDaemon(this.root, startupSignal);
+          : await this.ensureWithSessionProtection(startupSignal, validateStartup);
         validateStartup();
         if (daemon.paths.root !== this.root) throw new Error("Daemon root changed before attach.");
         const protectionOnly = daemon.needsUpgrade === true;
@@ -553,7 +584,7 @@ export class PiDaemonClient {
           await connection.dispose().catch(() => {});
           this.partialConnection = undefined;
           validateStartup();
-          if (existing || retried) throw error;
+          if (existing || retried || this.blockedUpgrade?.error !== undefined) throw error;
           retried = true;
           await waitForDaemonExit(daemon.identity, startupSignal);
           validateStartup();
@@ -588,8 +619,6 @@ export class PiDaemonClient {
       },
       (error: unknown) => {
         this.connecting = undefined;
-        if (error instanceof DaemonUpgradeBlockedError && !startupSignal.aborted && this.ownsContactUI())
-          this.blockedUpgrade = { instance: error.instance, reason: error.message, error };
         const outcome = startupSignal.aborted
           ? "cancelled"
           : existing && remoteErrorNamed(error, "DaemonStoppingError")
@@ -601,6 +630,7 @@ export class PiDaemonClient {
     );
     const connection = await this.connecting;
     validateStartup();
+    if (!existing && this.blockedUpgrade?.error !== undefined) throw this.blockedUpgrade.error;
     if (!existing && this.protectionOnly)
       throw new Error("This session is only protecting its files on an older Pi Sync daemon. Use /reload to upgrade.");
     return connection;

@@ -830,6 +830,38 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         pid: identity.pid,
       };
     if (method === "upgrade-stop") return stopForUpgrade(params, signal);
+    if (method === "protect-session") {
+      validateFacts(params);
+      const { pid, cwd, mode, sessionFile } = params;
+      if (!sessionFile) throw new Error("A session file is required for protection.");
+      return admission.run(async () => {
+        assertOwner();
+        if (!processExists(pid)) throw new Error("Client process is not alive.");
+        const recorded = [...participants.values()].some(
+          (peer) => peer.handoff?.kind === "exit" && peer.facts.pid === pid && peer.facts.sessionFile === sessionFile,
+        );
+        if (!recorded) {
+          if (participants.size >= 64 || closedClients.size >= 10_000)
+            throw new Error("Daemon client capacity reached.");
+          const id = randomUUID();
+          participants.set(id, {
+            facts: { id, pid, generation: id, cwd, mode, sessionFile, hasUI: false, idle: false },
+            handoff: { kind: "exit" },
+            callbacks: new Map(),
+            events: [],
+            connected: false,
+            closing: false,
+            suspected: false,
+            seen: 0,
+          });
+          closedClients.add(id);
+        }
+        await savePeers(undefined, recorded);
+        signal?.throwIfAborted();
+        assertOwner();
+        return { protected: true };
+      }, signal);
+    }
     if (method === "attach") {
       const attached = await admission.run(async () => {
         assertOwner();
@@ -1111,9 +1143,15 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         return;
       }
       if (
-        ["attach", "resume-contact", "startup.bootstrap", "state-wait", "foreground-stop", "upgrade-stop"].includes(
-          body.method,
-        )
+        [
+          "attach",
+          "protect-session",
+          "resume-contact",
+          "startup.bootstrap",
+          "state-wait",
+          "foreground-stop",
+          "upgrade-stop",
+        ].includes(body.method)
       ) {
         admissionController = new AbortController();
         response.once("close", disconnect);
@@ -1121,7 +1159,16 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       }
       const operation = handle(body.method, body.params, admissionController?.signal, body.reviewDetails === 1);
       if (
-        ["attach", "resume-contact", "startup.bootstrap", "update", "detach", "pause", "handoff"].includes(body.method)
+        [
+          "attach",
+          "protect-session",
+          "resume-contact",
+          "startup.bootstrap",
+          "update",
+          "detach",
+          "pause",
+          "handoff",
+        ].includes(body.method)
       ) {
         peerOperations.add(operation);
         void operation.finally(() => peerOperations.delete(operation)).catch(() => {});

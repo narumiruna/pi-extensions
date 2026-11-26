@@ -608,6 +608,30 @@ test("a failed interactive upgrade reports its error and protects the replacemen
     assert.equal(transport.wait.mock.calls.length, 0);
   }));
 
+test.each([true, false])("a blocked legacy upgrade only attaches to the same owner (same: %s)", (same) =>
+  withClient(async (f) => {
+    const { DaemonUpgradeBlockedError } = await import("@narumitw/pi-sync-daemon");
+    const [oldOwner, newOwner] = f.addresses;
+    assert.ok(oldOwner && newOwner);
+    const blocked = new DaemonUpgradeBlockedError(oldOwner.identity.instance, "legacy");
+    transport.ensure.mockRejectedValue(blocked);
+    transport.find.mockResolvedValue({ ...(same ? oldOwner : newOwner), needsUpgrade: true });
+    f.attachErrors.length = 0;
+
+    await assert.rejects(f.client.connect(), (error) => error === blocked);
+    assert.equal(f.client.blockedUpgradeReason(oldOwner.identity.instance), blocked.message);
+    assert.deepEqual(f.events, same ? ["old:attach"] : []);
+    if (same) {
+      const facts = f.connections[0]?.facts;
+      assert.equal(facts?.sessionFile, f.ctx.sessionManager.getSessionFile());
+      assert.equal(facts?.hasUI, false);
+      assert.equal(facts?.ready, false);
+    }
+    await assert.rejects(f.client.run("initialize", {}), (error) => error === blocked);
+    assert.equal(transport.ensure.mock.calls.length, 1);
+  }),
+);
+
 for (const attachError of [stopping(), Object.assign(new Error("Owner has exited"), { code: "ECONNREFUSED" })])
   test(`a failed upgrade is reported even when fallback cannot attach: ${attachError.message}`, () =>
     withClient(async (f) => {

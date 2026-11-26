@@ -3,11 +3,16 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { DaemonConnection, findDaemon, inspectDaemonStatus, stopDaemon } from "@narumitw/pi-sync-daemon";
 import { beforeEach, describe, type TestContext, test } from "vitest";
+import { WebDavSyncBackend } from "../src/backends/webdav/webdav-backend.js";
+import { configFromSettings } from "../src/settings/config.js";
+import { validateSettingsDocument } from "../src/settings/settings-validation.js";
 import { createRpcFixture } from "./daemon-rpc-fixture.js";
 import type { SyncRpc } from "./daemon-rpc-helpers.js";
+import { snapshot } from "./data-fixtures.js";
 
 const exec = promisify(execFile);
 const source = path.resolve("packages/pi-sync");
@@ -15,7 +20,7 @@ const daemonManifest = "dist/daemon/package.json";
 const daemonBuildId = "dist/daemon/dist/build-id.json";
 const oldVersion = "0.0.0";
 const oldId = "0".repeat(64);
-async function setup(context: TestContext, older: boolean) {
+async function setup(context: TestContext, older: boolean, includeSessions = false) {
   let cleanup: (() => Promise<void>) | undefined;
   const installation = await fs.mkdtemp(path.join(source, ".pi-sync-build-test-"));
   context.onTestFinished(async () => {
@@ -41,7 +46,11 @@ async function setup(context: TestContext, older: boolean) {
     installation,
     async (root) => {
       try {
-        await run("start", root);
+        if (includeSessions) {
+          const transfers = pathToFileURL(path.join(installation, "dist/daemon/dist/engine/sync/sync-operations.js"));
+          const env = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${transfers.href}` };
+          await exec(process.execPath, [cli, "start", "--root", root], { env });
+        } else await run("start", root);
         return () => stopDaemon(root);
       } catch (error) {
         await stopDaemon(root);
@@ -49,7 +58,13 @@ async function setup(context: TestContext, older: boolean) {
       }
     },
   );
-  const { agent, requests } = fixture;
+  const { agent, requests, cwd } = fixture;
+  if (includeSessions) {
+    const file = path.join(agent, "pi-sync.json");
+    const settings = JSON.parse(await fs.readFile(file, "utf8"));
+    settings.syncSetups.home.sync.include.push("sessions");
+    await fs.writeFile(file, JSON.stringify(settings));
+  }
   const client = await fixture.connect();
   await client.start();
   const original = await inspectDaemonStatus(agent);
@@ -65,6 +80,7 @@ async function setup(context: TestContext, older: boolean) {
     );
   return {
     agent,
+    cwd,
     client,
     original,
     requests,
@@ -153,6 +169,91 @@ describe("after an ordered version update", () => {
       clients: { pid: number; sessionFile?: string }[];
     };
     assert.ok(peers.clients.some((facts) => facts.pid === peer.child.pid && facts.sessionFile === peerFile));
+  });
+});
+
+describe("when an updated Pi opens a session during a pull review", () => {
+  let staged: Awaited<ReturnType<typeof setup>>;
+  let target: string;
+  let local: string;
+  let peer: SyncRpc;
+  let pull: Promise<unknown>;
+  let answer: (approved: boolean) => void;
+
+  beforeEach(async (context) => {
+    staged = await setup(context, true, true);
+    const { agent, cwd, installNewBuild, connect } = staged;
+    target = path.join(agent, "sessions", "fixture", "reviewed.jsonl");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    const session = (content: string) =>
+      [
+        { type: "session", version: 3, id: "reviewed", cwd },
+        { type: "model_change", id: "model", parentId: null, provider: "sync-rpc-fixture", modelId: "fixture" },
+        { type: "thinking_level_change", id: "level", parentId: "model", thinkingLevel: "off" },
+        { type: "message", id: "user", parentId: "level", message: { role: "user", content, timestamp: 0 } },
+      ]
+        .map((entry) => `${JSON.stringify({ ...entry, timestamp })}\n`)
+        .join("");
+    const config = configFromSettings(
+      validateSettingsDocument(JSON.parse(await fs.readFile(path.join(agent, "pi-sync.json"), "utf8"))),
+    );
+    assert.equal(config.backend.type, "webdav");
+    const remote = {
+      ...snapshot([
+        { path: "AGENTS.md", content: Buffer.from("Test-owned parent instructions.\n") },
+        { path: "sessions/fixture/reviewed.jsonl", content: Buffer.from(session("Remote transcript")) },
+      ]),
+      profile: config.snapshotIdentity,
+      selection: { version: 1 as const, include: ["AGENTS.md", "sessions"] },
+    };
+    await new WebDavSyncBackend(config.backend).publishSnapshot(remote, { kind: "missing" });
+    local = session("Live local transcript");
+    await fs.writeFile(target, local);
+    await fs.writeFile(path.join(agent, "AGENTS.md"), "Local edit before pull.\n");
+
+    const owner = await findDaemon(agent);
+    assert.ok(owner);
+    const review = Promise.withResolvers<void>();
+    const approval = Promise.withResolvers<boolean>();
+    answer = approval.resolve;
+    const actor = new DaemonConnection(
+      owner.paths,
+      owner.identity,
+      { id: randomUUID(), generation: randomUUID(), pid: process.pid, cwd, mode: "rpc", hasUI: true, idle: true },
+      {
+        callback: async ({ kind, payload }) => {
+          if (kind === "confirm" && (payload as { title: string }).title === "Pull pi settings and sessions?") {
+            review.resolve();
+            return approval.promise;
+          }
+          return true;
+        },
+      },
+    );
+    context.onTestFinished(async () => {
+      approval.resolve(false);
+      await actor.dispose();
+    });
+    await actor.attach(context.signal);
+    await actor.run("daemon.handover", {}, context.signal);
+    pull = actor.run("pull", { force: true, args: [] }, context.signal);
+    await Promise.race([review.promise, pull.then(() => assert.fail("Expected pull review."))]);
+    await installNewBuild();
+    peer = await connect(undefined, context.signal, target);
+    const state = await peer.start();
+    assert.equal(await fs.realpath(String(state.sessionFile)), await fs.realpath(target));
+  });
+
+  test("the old owner completes the approved pull without replacing the live transcript", async () => {
+    const { agent, original, requests } = staged;
+    assert.deepEqual(await inspectDaemonStatus(agent), original);
+    assert.ok(peer.records.some(({ message }) => String(message).includes("Daemon update deferred")));
+    answer(true);
+    assert.equal(await pull, "applied");
+    assert.equal(await fs.readFile(target, "utf8"), local);
+    assert.equal(await fs.readFile(path.join(agent, "AGENTS.md"), "utf8"), "Test-owned parent instructions.\n");
+    assert.equal(requests.length, 0);
   });
 });
 

@@ -297,7 +297,8 @@ async function startDaemon(
       },
     );
     const ready = await new Promise<Identity>((resolve, reject) => {
-      const timer = setTimeout(() => failed(new Error("Daemon readiness timed out.")), 15_000);
+      let booting = false;
+      let timer = setTimeout(() => failed(new Error("Daemon bootstrap timed out before the child handshake.")), 60_000);
       timer.unref?.();
       const abort = () => {
         cleanup();
@@ -318,6 +319,12 @@ async function startDaemon(
         failed(new Error(`Daemon startup exited (${code}); private state was retained.`));
       const message = (value: unknown) => {
         if (!record(value)) return;
+        if (value.type === "booting" && !booting) {
+          booting = true;
+          clearTimeout(timer);
+          timer = setTimeout(() => failed(new Error("Daemon readiness timed out.")), 15_000);
+          timer.unref?.();
+        }
         if (value.type === "error")
           failed(new Error(typeof value.message === "string" ? value.message : "Daemon startup failed."));
         if (value.type === "ready") {
@@ -366,7 +373,8 @@ async function waitForProcessExit(owner: Parameters<typeof processExited>[0], si
   signal?.throwIfAborted();
 }
 
-export async function findDaemon(root: string) {
+export async function findDaemon(root: string, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   let paths: RuntimePaths;
   try {
     paths = await runtimePaths(root);
@@ -375,9 +383,10 @@ export async function findDaemon(root: string) {
     throw error;
   }
   const identity = await readIdentity(paths);
+  signal?.throwIfAborted();
   if (!identity || !processExists(identity.pid)) return undefined;
   try {
-    const status = await hello(paths, identity);
+    const status = await hello(paths, identity, signal);
     return { paths: daemonPaths(paths, identity.instance), identity, ...status };
   } catch (error) {
     if (error instanceof DaemonError && error.remote.name === "DaemonStoppingError") return undefined;

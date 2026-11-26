@@ -7,6 +7,10 @@ import { inspectDaemonStatus } from "./daemon-status.js";
 import { privateDirectory, readIdentity, runtimePaths } from "./identity.js";
 import { openLifecycleLog } from "./lifecycle-log.js";
 
+function reportLaunch(message: Parameters<NonNullable<typeof process.send>>[0]) {
+  if (process.connected) process.send?.(message, () => {});
+}
+
 export async function main(args: readonly string[]) {
   const [command = "help", flag, root, ...extra] = args;
   if (["help", "--help", "-h"].includes(command)) {
@@ -31,6 +35,7 @@ export async function main(args: readonly string[]) {
   if (command === "serve") {
     if (expectedBuild && (extra[1] !== DAEMON_BUILD_VERSION || extra[2] !== (DAEMON_BUILD_ID ?? "")))
       throw new Error("Installed daemon build does not match the launch request.");
+    reportLaunch({ type: "booting" });
     const { createEngineService } = await import("./engine-service.js");
     const { startServer } = await import("./server.js");
     const paths = await runtimePaths(root);
@@ -86,7 +91,7 @@ export async function main(args: readonly string[]) {
     process.on("SIGTERM", stop);
     process.on("SIGINT", stop);
     // Parent disconnect means readiness IPC ended, not service shutdown.
-    process.send?.({ type: "ready", identity: server.identity });
+    reportLaunch({ type: "ready", identity: server.identity });
     process.channel?.unref();
     return;
   }
@@ -115,7 +120,7 @@ export async function main(args: readonly string[]) {
 }
 if (import.meta.main) {
   void main(process.argv.slice(2)).catch((error: unknown) => {
-    process.send?.({
+    reportLaunch({
       type: "error",
       message:
         "Daemon initialization failed; private state retained. Check endpoint ownership and compatible versions.",

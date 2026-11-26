@@ -480,52 +480,80 @@ test.each([
   }, mode),
 );
 
-test("a launched child that never announces readiness cannot hold the startup lock", () =>
+test.each([
+  ["bootstrap", false, /bootstrap timed out before the child handshake/u],
+  ["readiness", true, /readiness timed out/u],
+] as const)("a %s timeout releases the startup lock", (_phase, boot, failure) =>
   fixture(async (owner) => {
     await owner.command("release");
     const exited = once(owner.child, "exit");
     owner.child.send("exit");
     await exited;
-    const ready = Promise.withResolvers<void>();
-    const deadline = Promise.withResolvers<() => void>();
+    const launched = Promise.withResolvers<ChildProcess>();
     const spawnOverride = (await vi.importActual<typeof import("node:child_process")>("node:child_process")).spawn;
-    let child: ChildProcess | undefined;
     launches.mockImplementationOnce(() => {
-      child = spawnOverride(
+      const child = spawnOverride(
         process.execPath,
-        ["--eval", "process.on('disconnect', () => process.exit(0)); process.send({type:'fixture-ready'});"],
+        [
+          "--eval",
+          `
+process.on("disconnect", () => process.exit(0));
+process.on("message", () => {
+  process.send({ type: "booting" });
+  process.send({ type: "booting" });
+  process.send({ type: "fixture-booted" });
+});
+process.send({ type: "fixture-ready" });`,
+        ],
         { stdio: ["ignore", "ignore", "ignore", "ipc"] },
       );
-      child.once("message", () => ready.resolve());
+      launched.resolve(child);
       return child;
     });
+    const timers: { ms: number; trigger: () => void }[] = [];
     const originalSetTimeout = globalThis.setTimeout;
     const clock = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, milliseconds, ...args) => {
-      if (milliseconds === 15_000) deadline.resolve(() => callback(...args));
+      if (milliseconds === 15_000 || milliseconds === 60_000)
+        timers.push({ ms: milliseconds, trigger: () => callback(...args) });
       return originalSetTimeout(callback, milliseconds, ...args);
     });
+    const clear = vi.spyOn(globalThis, "clearTimeout");
     const controller = new AbortController();
     const startup = ensureDaemon(owner.root, controller.signal);
-    const failed = assert.rejects(startup, /readiness timed out/u);
-    void failed.catch(() => {});
+    void startup.catch(() => {});
+    let child: ChildProcess | undefined;
     try {
-      const [, trigger] = await beforeStartupSettles(
-        Promise.all([ready.promise, deadline.promise]),
-        "the child and its startup deadline",
-        startup,
+      child = await beforeStartupSettles(launched.promise, "child launch", startup);
+      await beforeStartupSettles(message(child, "fixture-ready"), "the test child handshake", startup);
+      assert.deepEqual(
+        timers.map(({ ms }) => ms),
+        [60_000],
       );
-      trigger();
-      await failed;
+      if (boot) {
+        const bootstrapTimer = clock.mock.results.find((_, index) => clock.mock.calls[index]?.[1] === 60_000)?.value;
+        const booted = message(child, "fixture-booted");
+        child.send("boot");
+        await beforeStartupSettles(booted, "the daemon handshake", startup);
+        assert.deepEqual(
+          timers.map(({ ms }) => ms),
+          [60_000, 15_000],
+        );
+        assert.ok(clear.mock.calls.some(([timer]) => timer === bootstrapTimer));
+      }
+      timers.at(-1)?.trigger();
+      await assert.rejects(startup, failure);
       assert.equal(await readIdentity(owner.paths), undefined);
       const release = await lockfile.lock(owner.paths.directory, { lockfilePath: owner.paths.startup });
       await release();
     } finally {
-      clock.mockRestore();
       controller.abort();
-      if (child) await terminate(child);
       await startup.catch(() => {});
+      clear.mockRestore();
+      clock.mockRestore();
+      if (child) await terminate(child);
     }
-  }));
+  }),
+);
 
 test("a lost upgrade stop reply retains the barrier and concurrent callers adopt one successor", () =>
   fixture(async (owner) => {

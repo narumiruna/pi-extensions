@@ -12,7 +12,7 @@ import { MockWebDavServer } from "./mock-webdav-server.js";
 export interface RpcFixture {
   agent: string;
   cwd: string;
-  connect(sessionDir?: string, signal?: AbortSignal): Promise<SyncRpc>;
+  connect(sessionDir?: string, signal?: AbortSignal, sessionFile?: string): Promise<SyncRpc>;
   startDaemon(): Promise<void>;
   prepare<T>(action: () => Promise<T>): Promise<T>;
   requests: Record<string, unknown>[];
@@ -165,13 +165,13 @@ export async function createRpcFixture(
     cwd,
     requests,
     storage,
-    connect(sessionDir, signal = context.signal) {
+    connect(sessionDir, signal = context.signal, sessionFile) {
       return prepare(async () => {
         await startDaemon();
         if (closing) throw new Error("Pi RPC fixture is closing.");
         context.signal.throwIfAborted();
         assert.ok(root);
-        const client = new SyncRpc(root, cwd, extension, sessionDir, signal);
+        const client = new SyncRpc(root, cwd, extension, sessionDir, signal, sessionFile);
         clients.push(client);
         return client;
       });

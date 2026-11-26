@@ -55,7 +55,7 @@ export async function requestDaemon(
       },
     );
 
-    request.setTimeout(method === "attach" || method === "resume-contact" ? 0 : 30_000, () =>
+    request.setTimeout(["attach", "protect-session", "resume-contact"].includes(method) ? 0 : 30_000, () =>
       request.destroy(new Error("Daemon request timed out.")),
     );
     request.once("error", reject);

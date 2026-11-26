@@ -69,6 +69,30 @@ test.each(["review", "committed", "release"] as const)("guarded upgrade leaves %
   );
 });
 
+test("a protection-only record cannot join or change the active participant set", () =>
+  fixture(
+    async () => assert.fail("unexpected job"),
+    async ({ server }) => {
+      const request = (method: string, params: unknown) => requestDaemon(server.paths, server.identity, method, params);
+      const { root } = server.paths;
+      const facts = { ...clientFacts(root), sessionFile: path.join(root, "sessions", "live.jsonl") };
+      const generation = server.participantGeneration();
+      await assert.rejects(request("protect-session", clientFacts(root)), /session file is required/u);
+      assert.deepEqual(await request("protect-session", facts), { protected: true });
+      assert.deepEqual(await request("protect-session", { ...facts, id: randomUUID() }), { protected: true });
+      const [protectedClient] = server.liveClients();
+      assert.equal(server.liveClients().length, 1);
+      assert.equal(protectedClient?.sessionFile, facts.sessionFile);
+      assert.deepEqual(server.participants(), []);
+      assert.equal(server.participantGeneration(), generation);
+      await assert.rejects(request("attach", protectedClient), /retired/u);
+      await assert.rejects(
+        request("submit", { id: randomUUID(), client: protectedClient?.id, operation: "fixture" }),
+        /not attached/u,
+      );
+    },
+  ));
+
 test("the final guard rejects a stop if another admission is committing", () => {
   const entered = Promise.withResolvers<void>();
   const finish = Promise.withResolvers<void>();
