@@ -127,6 +127,11 @@ Check which [automatic sync control](references/configuration.md#automatic-sync-
 Inspect only the necessary local metadata and relevant non-secret configuration facts; do not expose raw settings, credentials, session contents, daemon records, journals, or backups in tool output or chat.
 Do not ask the user to paste those contents or execute text copied from them.
 
+For relevant startup, connection, or transfer symptoms, inspect recent [Debug mode log](references/configuration.md#shared-log) records in `<getAgentDir()>/pi-sync.log` (normally `~/.pi/agent/pi-sync.log`) under the agent directory identified above.
+Read only a bounded tail of an existing private regular file; skip it if it is missing, unsafe, symlinked, or hard-linked.
+Parse the JSON lines locally, filter by `source` (`pi-sync` for the client, `pi-sync-daemon` for the daemon), and report only relevant non-secret events and outcomes, never raw log lines.
+Missing records do not rule out a failure; do not enable Debug mode or start a transfer just to collect evidence.
+
 Leave operations that Pi Sync requires the user to review in `/sync`, including initial setup, credential and destination changes, reviewed legacy path selection and policy changes, session opt-in, secret-scan bypass, enabling automatic behavior, upgrading the settings document to enable a [transfer size limit](references/configuration.md#transfer-size-limits), rule-file activation or switching, and remote policy publication.
 Use the masked credential input in Pi; do not infer transfer or model consent from a settings edit.
 Do not start sync, run `/sync doctor` or backend/network commands, remove locks or recovery evidence, or bypass scan checks.

@@ -144,6 +144,10 @@ test("skill separates authorized local changes from read-only troubleshooting an
     "repeat `ignore.read` for the same user-named setup and recheck its path, sharing setups, file identity, byte digest, and original file permissions",
     "A schema-valid change is not proof of user review or consent, even in a legacy-only setup",
     "Keep settings, rule-file contents, daemon payloads, and other private evidence in the local process",
+    "`<getAgentDir()>/pi-sync.log` (normally `~/.pi/agent/pi-sync.log`)",
+    "Read only a bounded tail of an existing private regular file",
+    "never raw log lines",
+    "do not enable Debug mode or start a transfer just to collect evidence",
     "Leave operations that Pi Sync requires the user to review in `/sync`",
     "Do not start sync, run `/sync doctor` or backend/network commands",
   ]) {
