@@ -630,7 +630,7 @@ Candidates can be reused only for matching evidence, policies and model identity
 They can contain merged text; retain them as private data.
 Different candidates are retained without automatic retention pruning.
 Ordinary **Sync now** and `/sync sync` reuse a valid cached refusal without another provider request.
-The manager's **Retry refused model result…** action separately reviews the setup, destination, conflict paths, selected model, disclosure and cost before one fresh request for that exact refusal.
+The manager's **Retry refused model result…** action opens any required automatic-transfer review inline, then separately reviews the setup, destination, conflict paths, selected model, disclosure and cost before one fresh request for that exact refusal. Automatic-transfer approval does not confirm the model request.
 It requires foreground TUI/RPC, Autonomous sync, an accepted baseline and no pending journal; use ordinary Sync now or reviewed recovery first when those prerequisites are absent.
 Changed evidence, settings, model, session or cached bytes invalidate the review without disclosure.
 A repeated refusal, invalid response or failed pre-publication replacement retains the original result.

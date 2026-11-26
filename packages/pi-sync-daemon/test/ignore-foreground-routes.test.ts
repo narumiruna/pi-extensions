@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "vitest";
 import { DaemonError } from "../src/client.js";
+import { readConsent } from "../src/consent.js";
 import type { LatestPointer } from "../src/engine/backends/backend-types.js";
 import { WebDavSyncBackend } from "../src/engine/backends/webdav/webdav-backend.js";
 import { ignorePolicyFingerprint } from "../src/engine/ignore/ignore-source.js";
@@ -213,6 +214,52 @@ function snapshotFile(path: string, text: string) {
   const bytes = Buffer.from(text);
   return { path, sha256: createHash("sha256").update(bytes).digest("hex"), contentBase64: bytes.toString("base64") };
 }
+
+test.each(["decline", "approve", "replace rules", "switch setup"] as const)(
+  "retry opens the missing automatic policy review inline: %s",
+  (answer) =>
+    fixture(async ({ root, loadSettings, saveSettings, run, onCallback, requests }) => {
+      const settings = loadSettings();
+      settings.syncSetups.home.sync.agentMode = true;
+      await saveSettings(settings);
+      const reviews: string[] = [];
+      onCallback(async ({ kind, payload }) => {
+        assert.equal(kind, "merge-review");
+        const { title, content, confirmationLabel } = payload as {
+          title: string;
+          content: string;
+          confirmationLabel: string;
+        };
+        assert.equal(title, "Allow the enabled automatic sync modes for this setup?");
+        assert.equal(confirmationLabel, "Approve automatic transfers");
+        reviews.push(content);
+        if (answer === "replace rules") {
+          const rules = path.join(root, ".syncignore");
+          await fs.rename(rules, `${rules}.original`);
+          await fs.copyFile(`${rules}.original`, rules);
+        } else if (answer === "switch setup") {
+          await saveSettings({ ...settings, activeSyncSetup: "other" });
+        }
+        return answer !== "decline";
+      });
+      const retry = () => run("sync", { setup: "home", agentRetryRefusal: true, yes: true });
+      if (answer === "decline") assert.equal(await retry(), "cancelled");
+      else if (answer === "approve") {
+        // No baseline was seeded. Reaching this guard proves approval resumes the original retry, not Sync now.
+        await assert.rejects(retry(), /Retry requires an accepted baseline/u);
+        await assert.rejects(retry(), /Retry requires an accepted baseline/u);
+      } else await assert.rejects(retry(), /changed/u);
+      assert.equal(reviews.length, 1);
+      assert.match(reviews[0], /Setup: home\nDestination: storage · shared/u);
+      assert.match(reviews[0], /does not allow work after the last Pi exits/u);
+      assert.match(reviews[0], /Sending conflict evidence again still requires its own confirmation/u);
+      assert.equal(Boolean(readConsent(root)?.setups.home?.automaticFingerprint), answer === "approve");
+      assert.deepEqual(requests, []);
+      const policy = (await run("daemon.policy")) as { automatic: boolean; afterExit: boolean };
+      assert.equal(policy.automatic, answer === "approve");
+      assert.equal(policy.afterExit, false);
+    }),
+);
 
 for (const direction of ["push", "pull"] as const) {
   test(`the foreground ${direction} IPC path accepts divergence without a second approval`, () =>

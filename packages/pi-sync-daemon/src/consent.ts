@@ -223,7 +223,12 @@ function ignorePublicationConsentLines(config: AnySyncConfig) {
   ];
 }
 
-export async function reviewAutomaticPolicy(execution: Execution, config: AnySyncConfig, expectedFingerprint: string) {
+export async function reviewAutomaticPolicy(
+  execution: Execution,
+  config: AnySyncConfig,
+  expectedFingerprint: string,
+  origin?: "retry",
+) {
   if (consentFingerprint(execution.root, config) !== expectedFingerprint)
     throw new Error("Setup changed; reopen the automatic transfer review.");
   if (config.reservedIgnoreNames === undefined || automaticPolicyAuthorized(execution.root, config)) {
@@ -264,21 +269,33 @@ export async function reviewAutomaticPolicy(execution: Execution, config: AnySyn
     config.continuous && config.agentMode && "Continuous sync and Autonomous model requests",
   ].filter(Boolean);
   if (modes.length === 0) throw new Error("No automatic transfer mode is enabled under the current local rules.");
-  const accepted = await execution.request("confirm", {
-    title: "Allow the enabled automatic sync modes for this setup?",
-    message: [
-      `Setup: ${safeTerminalText(config.setupName)}`,
-      `Destination: ${safeTerminalText(config.connectionName)} · ${safeTerminalText(config.storagePath)}`,
-      ...(config.ignorePolicy
-        ? [
-            `Local ignore file: ${safeTerminalText(config.ignorePolicy.filename)}`,
-            ...ignorePublicationConsentLines(config),
-          ]
-        : []),
-      `Enabled modes: ${modes.join("; ")}`,
-      "Their usual baseline, remote selection, and ownership checks still apply. This does not allow work after the last Pi exits. A settings or rule-file change requires a new review.",
-    ].join("\n"),
-  });
+  const title = "Allow the enabled automatic sync modes for this setup?";
+  const lines = [
+    `Setup: ${safeTerminalText(config.setupName)}`,
+    `Destination: ${safeTerminalText(config.connectionName)} · ${safeTerminalText(config.storagePath)}`,
+    ...(config.ignorePolicy
+      ? [
+          `Local ignore file: ${safeTerminalText(config.ignorePolicy.filename)}`,
+          ...ignorePublicationConsentLines(config),
+        ]
+      : []),
+    `Enabled modes: ${modes.join("; ")}`,
+    "Their usual baseline, remote selection, and ownership checks still apply. This does not allow work after the last Pi exits. A settings or rule-file change requires a new review.",
+  ];
+  if (origin === "retry")
+    lines.push(
+      "This approval is saved separately from the model retry. Sending conflict evidence again still requires its own confirmation.",
+    );
+  const content = lines.join("\n");
+  const accepted =
+    origin === "retry"
+      ? await execution.request("merge-review", {
+          title,
+          content,
+          confirmationLabel: "Approve automatic transfers",
+          summaryLines: lines,
+        })
+      : await execution.request("confirm", { title, message: content });
   validate();
   if (accepted !== true) {
     execution.noteDebugOutcome?.("cancelled");

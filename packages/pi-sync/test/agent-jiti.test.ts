@@ -10,6 +10,7 @@ import { afterAll, aroundEach, describe, test } from "vitest";
 import { createSyncBackend } from "../src/backends/backend-factory.js";
 import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
+import { validateSettingsDocument } from "../src/settings/settings-validation.js";
 import { sessionDirFromContext } from "../src/snapshot/session-paths.js";
 import { regenerateSnapshotIdentity } from "../src/snapshot/snapshot.js";
 import { readStateForConfig } from "../src/state/sync-state-store.js";
@@ -139,12 +140,25 @@ async function withJitiFixture(
         mock.ctx.modelRegistry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
       }
       signal.throwIfAborted();
-      const settings = v3WebDavSettings({ include: ["AGENTS.md"] });
-      settings.storageConnections.dav.url = server.url;
-      Object.assign(settings.syncSetups.home.sync, {
+      const legacy = v3WebDavSettings({ include: ["AGENTS.md"] });
+      legacy.storageConnections.dav.url = server.url;
+      Object.assign(legacy.syncSetups.home.sync, {
         agentMode: trigger !== "non-agent",
         ...(["continuous", "after-exit"].includes(trigger) ? { continuous: true } : {}),
       });
+      const settings = validateSettingsDocument(legacy);
+      if (trigger === "retry") {
+        mock.ctx.sessionManager.getSessionDir = () => path.join(agentDir, "sessions");
+        settings.version = 8;
+        settings.onSwitch = "switch-only";
+        settings.syncSetups.home.sync = {
+          scope: "agent-directory",
+          pathPolicy: "ignore-file",
+          automatic: false,
+          agentMode: true,
+        };
+        await fs.writeFile(path.join(agentDir, ".syncignore"), "/*\n!/AGENTS.md\n");
+      }
       await fs.writeFile(localConfigPath(), JSON.stringify(settings));
       signal.throwIfAborted();
       await fs.writeFile(path.join(agentDir, "AGENTS.md"), "base\n");
@@ -193,26 +207,57 @@ async function withJitiFixture(
       assert.equal(loaded.extensions.length, 1);
       assert.ok(loadedExtension);
       assert.equal(loadedExtension.resolvedPath, entry);
+      const command = loadedExtension.commands.get("sync");
+      assert.ok(command);
+      const runCommand = (args: string) => command.handler(args, mock.ctx as ExtensionCommandContext);
+      const retry = "Retry refused model result…";
+      const approvePolicy = "Yes, Approve automatic transfers";
+      if (foreground) {
+        for (const start of loadedExtension.handlers.get("session_start") ?? [])
+          await start({ type: "session_start", reason: "startup" }, mock.ctx);
+        signal.throwIfAborted();
+      }
+      if (trigger === "retry") {
+        const consentFile = path.join(agentDir, "pi-sync/daemon.json");
+        const beforeApproval = await fs.readFile(consentFile);
+        const choices = [retry, approvePolicy, undefined];
+        mock.ctx.ui.select = async () => choices.shift();
+        await runCommand("");
+        assert.deepEqual(choices, []);
+        assert.equal(resolver.requests.length, 0, "No cached refusal exists yet.");
+        await runCommand("sync");
+        signal.throwIfAborted();
+        assert.equal(resolver.requests.length, 1, JSON.stringify(mock.notifications));
+        assert.equal(await fs.readFile(path.join(agentDir, "AGENTS.md"), "utf8"), "local\n");
+        // Restore handover-only consent without changing the settings or invalidating the cached refusal.
+        await fs.writeFile(consentFile, beforeApproval);
+      }
       await use(async () => {
         if (foreground) {
-          for (const start of loadedExtension.handlers.get("session_start") ?? [])
-            await start({ type: "session_start", reason: "startup" }, mock.ctx);
-          signal.throwIfAborted();
-          const command = loadedExtension.commands.get("sync");
-          assert.ok(command);
-          await command.handler(trigger === "non-agent" ? "sync --yes" : "sync", mock.ctx as ExtensionCommandContext);
-          signal.throwIfAborted();
           if (trigger === "retry") {
-            assert.equal(resolver.requests.length, 1);
-            assert.equal(await fs.readFile(path.join(agentDir, "AGENTS.md"), "utf8"), "local\n");
-            const choices = ["Retry refused model result…", "Yes, Send one fresh request", undefined];
-            mock.ctx.ui.select = async () => choices.shift();
-            await command.handler("", mock.ctx as ExtensionCommandContext);
+            const choices = [retry, approvePolicy, "Yes, Send one fresh request", undefined];
+            const reviews: Array<{ title: string; choices: string[]; requests: number }> = [];
+            mock.ctx.ui.select = async (title, items) => {
+              reviews.push({ title, choices: items, requests: resolver.requests.length });
+              return choices.shift();
+            };
+            await runCommand("");
             signal.throwIfAborted();
-            assert.equal(choices.length, 0);
+            assert.deepEqual(choices, []);
+            assert.match(reviews[1]?.title ?? "", /Allow the enabled automatic sync modes for this setup\?/u);
+            assert.deepEqual(reviews[1]?.choices.slice(0, 2), ["No, cancel", approvePolicy]);
+            assert.match(reviews[2]?.title ?? "", /Retry refused model result\?/u);
+            assert.deepEqual(
+              reviews.slice(1, 3).map((review) => review.requests),
+              [1, 1],
+            );
             const candidates = await fs.readdir(path.join(agentDir, "pi-sync/agent-resolver"));
-            assert.ok(candidates.some((name) => name.includes(".refusal-")));
-          }
+            assert.ok(
+              candidates.some((name) => name.includes(".refusal-")),
+              JSON.stringify(mock.notifications),
+            );
+          } else await runCommand(trigger === "non-agent" ? "sync --yes" : "sync");
+          signal.throwIfAborted();
         } else if (trigger === "after-exit") {
           for (const start of loadedExtension.handlers.get("session_start") ?? [])
             await start({ type: "session_start", reason: "startup" }, mock.ctx);

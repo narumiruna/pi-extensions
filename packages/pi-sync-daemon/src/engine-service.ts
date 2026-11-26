@@ -360,18 +360,36 @@ export function createEngineService(root: string, ignoreFileSettingsAvailable = 
         if (operation === "sync" || operation === "startup-transfer") {
           const run = async () => {
             const { prepareResolverHost } = await import("./resolver-host.js");
-            const { loadConfig } = await import("./engine/settings/config.js");
+            const { loadConfig, syncCheckConfigFingerprint } = await import("./engine/settings/config.js");
             const config = await loadConfig(options.setup, execution.signal);
             await automatic?.refresh();
             automatic?.validate(config);
             execution.validate();
             if (config.agentMode && !automaticPolicyAuthorized(root, config)) {
-              execution.noteDebugOutcome?.("blocked");
-              throw new Error(
-                "Autonomous sync requires a separate policy review. Use Settings → Review automatic transfers, or choose a reviewed push or pull.",
+              if (!options.agentRetryRefusal) {
+                execution.noteDebugOutcome?.("blocked");
+                throw new Error(
+                  "Autonomous sync requires a separate policy review. Use Settings → Review automatic transfers, or choose a reviewed push or pull.",
+                );
+              }
+              const approved = await reviewAutomaticPolicy(
+                execution,
+                config,
+                consentFingerprint(root, config),
+                "retry",
               );
+              execution.validate();
+              if (!approved) return "cancelled" as const;
+              monitor.reviewedPolicy(config);
             }
-            if (operation === "sync" && !options.agentRetryRefusal) monitor.explicitSync(config, execution);
+            if (options.agentRetryRefusal) {
+              const fingerprint = syncCheckConfigFingerprint(config);
+              options.validateAgentRetryPolicy = (current) => {
+                execution.validate();
+                if (syncCheckConfigFingerprint(current) !== fingerprint || !automaticPolicyAuthorized(root, current))
+                  throw new Error("Sync setup or automatic transfer approval changed; reopen the retry.");
+              };
+            } else if (operation === "sync") monitor.explicitSync(config, execution);
             const binding = JSON.stringify(execution.facts()?.model);
             const resolver = await prepareResolverHost(
               root,

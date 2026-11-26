@@ -100,6 +100,7 @@ export async function mergeSync(
     }
   };
   const validateRetryAuthorization = (config: AnySyncConfig) => {
+    options.validateAgentRetryPolicy?.(config);
     if (
       options.agentRetryRefusal &&
       (!config.agentMode || options.auto || options.background || !ctx.hasUI || !["tui", "rpc"].includes(ctx.mode))

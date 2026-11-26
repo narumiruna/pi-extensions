@@ -815,6 +815,7 @@ export async function syncBoth(
   throwIfAborted(options.signal);
   options.background?.validate(config);
   if (options.agentRetryRefusal) {
+    options.validateAgentRetryPolicy?.(config);
     if (!config.agentMode || options.auto || options.background || !ctx.hasUI)
       throw new Error("Enable Autonomous sync and use the foreground manager to retry a cached refusal.");
     const state = await readStateForConfig(config);
