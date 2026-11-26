@@ -317,10 +317,22 @@ A local check does not verify remote connectivity or permissions. Diagnostics ca
 
 Pi Sync no longer supports `.syncignore` or custom ignore files. A settings document with any `sync.pathPolicy: "ignore-file"` or `sync.ignoreFile` entry is blocked, even if that setup is inactive. Remote snapshots in versions 6 and 7, pending ignore-file recovery, and accepted local state tied to the retired policy are also blocked. The settings version itself does not need to change. Do not use `--force`, strip the policy fields, or delete recovery files to make the operation proceed.
 
+#### Start at a fresh storage location
+
+If only the remote snapshot or last accepted sync is blocked, keep your current setup and give it a new, empty destination. This requires valid local settings and no pending recovery. If you need files that exist only at the old destination, recover them with the compatible release and the original setup and rules first.
+
+1. Turn off the setup's [automatic sync controls](#automatic-sync-controls). Open **/sync → Settings → Storage location**.
+2. For R2/S3 or WebDAV, enter an unused path, such as `pi-sync/selected-v2`, in **Storage path** or **WebDAV storage path**, respectively. For Git, use a new branch; changing only the path on the same branch is not enough. Review and save the destination. Saving does not transfer files, move history, or delete anything at the old location.
+3. Confirm which local files should sync, then review the first **Push to remote** from the device with the files you want to keep. Point the other devices at the new destination before turning automation back on.
+
+#### Recover local settings or pending operations
+
+Changing the storage location cannot fix invalid local settings or clear a pending recovery. Use the steps below if local settings still use the retired policy or an ignore-file operation needs recovery. For other settings errors, see [settings recovery](#unsupported-old-settings-and-recovery).
+
 1. Stop automatic work and close the other Pi clients on the same agent directory. Back up the settings, rule files, and pending journals privately. If needed, use the last compatible Pi Sync release (`@narumitw/pi-sync@0.67.3`, with its bundled daemon `0.13.3`). For a standalone daemon, use matching release `@narumitw/pi-sync-daemon@0.13.3`. [Drain and verify the current owner's exit](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/daemon-migration.md#ownership-and-upgrade) before changing builds. Do not overwrite a running installation or reuse an older settings backup over newer bytes.
 2. In the compatible version, finish pending recovery using the original setup. If the remote has files you want that are not available locally, review a Pull before changing setups. A snapshot with only a policy fingerprint requires the matching local rules. Preserve the old remote and its history.
 3. Switch to an existing compatible **Selected paths** setup or use **Sync setups… → Add sync setup → Recommended Pi settings** at a separate empty storage location. For Git, use a separate branch. Select **Switch only** and keep session and automatic transfers off while reviewing scope. The old include list may be gone; choose paths explicitly, and do not treat a retired rule file as sync content. Once no setup uses it, archive it outside the agent directory or exclude it before using directory scope.
-4. After pending recovery is clear, use **Remove sync setup…** to remove the old local setup in the compatible version. This does not delete remote data. If the replacement setup's accepted state came from a mixed settings file, use a reviewed transfer with the compatible build after removing the retired setups, or use a separate empty location. Then upgrade and review the first transfer. Confirm all devices use the intended destination before turning automation back on.
+4. After pending recovery is clear, use **Remove sync setup…** to remove the old local setup in the compatible version. This does not delete remote data. If the replacement setup's accepted state came from a settings file that still had retired setups, use a reviewed transfer with the compatible build after removing them, or give the replacement setup a [fresh storage location](#start-at-a-fresh-storage-location). Then upgrade and review the first transfer. Confirm all devices use the intended destination before turning automation back on.
 
 Use `/skill:configure-pi-sync` for help selecting the right branch of this workflow. The skill does not downgrade packages, edit retired settings, clear recovery evidence, or execute a transfer.
 

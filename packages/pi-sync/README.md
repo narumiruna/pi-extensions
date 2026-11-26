@@ -293,7 +293,9 @@ Startup checks report included-content differences without changing anything. Tr
 
 ### Retired ignore-file policy
 
-**Breaking change:** Pi Sync no longer uses `.syncignore` or a custom rule file. If any setup still uses this policy, or a remote or pending recovery uses the retired format, Pi Sync stops the affected sync rather than assuming a wider scope. Run `/skill:configure-pi-sync` or follow the [manual recovery guide](./skills/configure-pi-sync/references/configuration.md#retired-ignore-file-policy). Upgrading does not delete or convert existing settings, rule files, or remote history.
+**Breaking change:** Pi Sync no longer uses `.syncignore` or a custom rule file. It blocks retired settings, snapshots, and recovery records instead of guessing what to sync. Upgrading does not delete or convert existing settings, rule files, or remote history.
+
+If only the remote snapshot or last accepted sync is blocked, keep your setup and [choose a new, empty storage location](./skills/configure-pi-sync/references/configuration.md#start-at-a-fresh-storage-location). For local settings or pending recovery errors, run `/skill:configure-pi-sync` or follow the [manual recovery guide](./skills/configure-pi-sync/references/configuration.md#retired-ignore-file-policy).
 
 ### Legacy path rules
 
