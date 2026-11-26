@@ -24,11 +24,12 @@ Keep settings, daemon payloads, and other private evidence in the local process;
 Follow the [retired ignore-file policy guide](references/configuration.md#retired-ignore-file-policy).
 Distinguish an unsupported setup, a retired remote format, a retired local baseline, and a pending recovery error.
 Preserve the affected data.
+If only the remote format or local baseline is blocked, ask the user to keep the current setup and [choose a fresh storage location in `/sync`](references/configuration.md#start-at-a-fresh-storage-location). Do not recommend switching setups for this case.
 If the daemon rejects settings, inspect only the canonical local file to identify setup names and the presence of `pathPolicy: "ignore-file"` or `ignoreFile`.
 Before reading it, verify that it is a bounded regular file under the intended agent root without symlinks or hard links; keep the parsed contents local.
 An unreadable or malformed file needs separate repair.
 Do not start or replace the daemon, downgrade packages, remove or rewrite settings, interpret a pending journal as disposable, or contact storage to check a remote.
-Guide the user through the compatible version's reviewed recovery and setup controls instead.
+For invalid local settings or pending recovery, guide the user through the applicable recovery steps. A new storage location does not clear either blocker.
 
 ## Edit `pi-sync.json`
 
