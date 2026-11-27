@@ -14,6 +14,7 @@ type Viewport = { width: number; height: number };
 
 export interface MountedPlanLayout {
   isVisible(): boolean;
+  setWidthRatio(ratio: number): void;
   restore(): void;
 }
 
@@ -47,6 +48,8 @@ export function mountFullscreenPlanLayout(
   side: PlanPaneSide,
   pane: Component,
   theme: Theme,
+  widthRatio: number,
+  onResize: (ratio: number) => void,
 ): MountedPlanLayout | undefined {
   const native = nativeFullscreenRoot(tui, rendererChildren);
   if (!native) return;
@@ -55,7 +58,16 @@ export function mountFullscreenPlanLayout(
   let active = true;
   const ownsLayout = (): boolean =>
     active && tui.mode === "fullscreen" && tui.children === rendererChildren && readRoot() === wrapper;
-  const wrapper = createPlanSplitLayout(original, pane, side, tui, theme, ownsLayout);
+  const { wrapper, setWidthRatio } = createPlanSplitLayout(
+    original,
+    pane,
+    side,
+    tui,
+    theme,
+    ownsLayout,
+    widthRatio,
+    onResize,
+  );
   const restore = () => {
     active = false;
     if (tui.mode === "fullscreen" && readRoot() === wrapper) {
@@ -67,6 +79,7 @@ export function mountFullscreenPlanLayout(
     if (readRoot() === wrapper) {
       return {
         isVisible: () => ownsLayout() && canShowPane({ width: tui.terminal.columns, height: tui.terminal.rows }),
+        setWidthRatio,
         restore,
       };
     }
@@ -115,13 +128,16 @@ function createPlanSplitLayout(
   tui: TUI,
   theme: Theme,
   ownsLayout: () => boolean,
+  widthRatio: number,
+  onResize: (ratio: number) => void,
 ) {
   let viewport: Viewport = { width: 0, height: 0 };
-  let preferredWidth: number | undefined;
+  let drag: { viewport: Viewport; initialWidth: number; width: number } | undefined;
   const clampWidth = (width: number, requested: number) =>
     Math.min(width - DIVIDER_COLUMNS - MIN_CONVERSATION_COLUMNS, Math.max(MIN_PANE_COLUMNS, requested));
-  const paneWidth = (width: number) => clampWidth(width, preferredWidth ?? Math.floor((width - DIVIDER_COLUMNS) / 3));
-  const canDrag = (start: typeof viewport) =>
+  const paneWidth = (width: number) =>
+    drag?.width ?? clampWidth(width, Math.round((width - DIVIDER_COLUMNS) * widthRatio));
+  const canDrag = (start: Viewport) =>
     start === viewport &&
     start.width === tui.terminal.columns &&
     start.height === tui.terminal.rows &&
@@ -133,20 +149,31 @@ function createPlanSplitLayout(
     invalidate() {},
     handleMouse(event) {
       if (event.type !== "press" || event.button !== "left" || !canDrag(viewport)) return;
-      let start: typeof viewport | undefined = viewport;
+      const initialWidth = paneWidth(viewport.width);
+      const gesture = { viewport, initialWidth, width: initialWidth };
+      drag = gesture;
       const capturedDrag: Component = {
         render: () => [],
         invalidate() {},
         handleMouse(event) {
-          if (!start || !canDrag(start)) {
-            start = undefined;
+          if (drag !== gesture) return;
+          const start = gesture.viewport;
+          if (!canDrag(start)) {
+            drag = undefined;
             return;
+          }
+          if (event.type === "release") {
+            drag = undefined;
+            if (event.button === "left" && gesture.width !== gesture.initialWidth) {
+              onResize(gesture.width / (start.width - DIVIDER_COLUMNS));
+            }
+            return { handled: true, render: gesture.width !== paneWidth(start.width) };
           }
           if (event.type !== "drag" || event.button !== "left") return;
           const requested = side === "left" ? event.screenX : start.width - DIVIDER_COLUMNS - event.screenX;
           const nextWidth = clampWidth(start.width, requested);
-          const render = nextWidth !== paneWidth(start.width);
-          preferredWidth = nextWidth;
+          const render = nextWidth !== gesture.width;
+          gesture.width = nextWidth;
           return { handled: true, render };
         },
       };
@@ -167,7 +194,7 @@ function createPlanSplitLayout(
   const mainEntry = { component: main, basis: 0, grow: 1, minSize: 1 };
   const dividerEntry = { component: divider, basis: DIVIDER_COLUMNS, shrink: 0 };
   const sideEntry = { component: pane, basis: 1, shrink: 0 };
-  return new (class extends tuiCore.HStack {
+  const wrapper = new (class extends tuiCore.HStack {
     constructor() {
       super(side === "left" ? [sideEntry, dividerEntry, mainEntry] : [mainEntry, dividerEntry, sideEntry]);
       const paneSlot = this.entries[side === "left" ? 0 : 2];
@@ -175,7 +202,10 @@ function createPlanSplitLayout(
       if (!paneSlot || !dividerSlot) return;
       const updateViewport = ({ width, height }: typeof viewport) => {
         const rows = Math.min(height, tui.terminal.rows);
-        if (viewport.width !== width || viewport.height !== rows) viewport = { width, height: rows };
+        if (viewport.width !== width || viewport.height !== rows) {
+          viewport = { width, height: rows };
+          drag = undefined;
+        }
         return canShowPane(viewport);
       };
       paneSlot.visible = (size) => {
@@ -186,4 +216,13 @@ function createPlanSplitLayout(
       dividerSlot.visible = updateViewport;
     }
   })();
+  return {
+    wrapper,
+    setWidthRatio(ratio: number) {
+      if (widthRatio === ratio) return;
+      widthRatio = ratio;
+      drag = undefined;
+      if (ownsLayout()) tui.requestRender();
+    },
+  };
 }

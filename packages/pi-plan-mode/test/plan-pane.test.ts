@@ -12,7 +12,10 @@ function setup(mode?: "regular" | "fullscreen") {
   const ctx: ExtensionContext = createMockContext({ mode: "tui" }).ctx;
   ctx.ui.setWidget = terminal.setWidget;
   const pane = createPlanPaneController();
+  let ratio: number | undefined;
+  const savedRatios: number[] = [];
   return {
+    savedRatios,
     editor: terminal.editor,
     transcript: terminal.transcript,
     root: terminal.root,
@@ -26,7 +29,12 @@ function setup(mode?: "regular" | "fullscreen") {
     pane,
     frame: () => terminal.render().map(stripTerminalSequences),
     async set(side: "left" | "right" | "off", plan?: string) {
-      pane.update(ctx, side, plan);
+      const onResize = (next: number) => {
+        ratio = next;
+        savedRatios.push(next);
+        pane.update(ctx, side, plan, ratio, onResize);
+      };
+      pane.update(ctx, side, plan, ratio, onResize);
       await Promise.resolve();
       return terminal.render().map(stripTerminalSequences);
     },
@@ -47,26 +55,28 @@ function mouse(f: ReturnType<typeof setup>, button: number, column: number, suff
 }
 
 test.each([
-  { side: "right", initial: 67, wider: 55, min: 76, max: 49 },
-  { side: "left", initial: 34, wider: 46, min: 25, max: 52 },
+  { side: "right", initial: 50, narrower: 65, min: 76, max: 49 },
+  { side: "left", initial: 51, narrower: 36, min: 25, max: 52 },
 ] as const)("dragging the $side divider reflows the plan and respects both width limits", async (layout) => {
   const f = setup();
   try {
     const plan = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen";
     const original = await f.set(layout.side, plan);
     assert.equal(dividerColumn(original), layout.initial);
-    assert.doesNotMatch(original.join("\n"), /one two three four five six seven eight nine/u);
+    assert.match(original.join("\n"), /one two three four five six seven eight nine/u);
 
     mouse(f, 0, layout.initial);
-    mouse(f, 32, layout.wider);
-    assert.equal(dividerColumn(f.frame()), layout.wider, "the divider moves before release");
-    assert.match(f.frame().join("\n"), /one two three four five six seven eight nine/u);
+    mouse(f, 32, layout.narrower);
+    assert.equal(dividerColumn(f.frame()), layout.narrower, "the divider moves before release");
+    assert.doesNotMatch(f.frame().join("\n"), /one two three four five six seven eight nine/u);
     mouse(f, 32, layout.side === "left" ? 1 : 100);
     assert.equal(dividerColumn(f.frame()), layout.min, "the pane keeps at least 24 columns");
     mouse(f, 32, layout.side === "left" ? 100 : 1);
     assert.equal(dividerColumn(f.frame()), layout.max, "the conversation keeps at least 48 columns");
+    assert.deepEqual(f.savedRatios, []);
     mouse(f, 0, layout.max, "m");
-    mouse(f, 32, layout.wider);
+    assert.deepEqual(f.savedRatios, [51 / 99]);
+    mouse(f, 32, layout.narrower);
     assert.equal(dividerColumn(f.frame()), layout.max, "motion after release cannot resize");
     assert.equal(f.terminal.host.getFocusedComponent(), f.editor);
     f.send("\u001b[200~pasted\nline\u001b[201~");
@@ -81,15 +91,18 @@ test("terminal resize clamps the saved width without changing it or continuing a
   const f = setup();
   try {
     await f.set("right", "# First plan");
-    mouse(f, 0, 67);
+    mouse(f, 0, 50);
     mouse(f, 32, 56);
-    assert.equal(dividerColumn(f.frame()), 56);
+    mouse(f, 0, 56, "m");
+    mouse(f, 0, 56);
+    mouse(f, 32, 60);
+    assert.equal(dividerColumn(f.frame()), 60);
     f.resize(100, 20);
     mouse(f, 32, 73);
     mouse(f, 0, 73, "m");
     assert.equal(dividerColumn(f.frame()), 56, "a row-only resize cancels the drag before the next paint");
-    mouse(f, 0, 56);
-
+    f.resize(140, 18);
+    assert.equal(dividerColumn(f.frame()), 78, "a wider terminal scales the saved proportion");
     f.resize(100, 11);
     assert.equal(dividerColumn(f.frame()), 0);
     f.resize(79, 12);
@@ -102,7 +115,9 @@ test("terminal resize clamps the saved width without changing it or continuing a
     mouse(f, 0, 73, "m");
     assert.equal(dividerColumn(await f.set("right", "# Revised plan")), 56);
     assert.equal(dividerColumn(await f.set("off")), 0);
-    assert.equal(dividerColumn(await f.set("right", "# Reopened")), 67);
+    assert.equal(dividerColumn(await f.set("right", "# Reopened")), 56);
+    assert.equal(dividerColumn(await f.set("left", "# Other side")), 45);
+    assert.deepEqual(f.savedRatios, [44 / 99]);
   } finally {
     f.stop();
   }
@@ -112,19 +127,25 @@ test("only a left-button press on the visible divider enables a resize", async (
   const f = setup();
   try {
     await f.set("right", "# Plan");
-    mouse(f, 1, 67);
+    mouse(f, 1, 50);
     mouse(f, 33, 56);
     mouse(f, 1, 56, "m");
     mouse(f, 0, 60);
-    mouse(f, 32, 67);
-    mouse(f, 0, 67, "m");
-    assert.equal(dividerColumn(f.frame()), 67);
+    mouse(f, 32, 50);
+    mouse(f, 0, 50, "m");
+    mouse(f, 0, 50);
+    mouse(f, 0, 50, "m");
+    mouse(f, 0, 50);
+    mouse(f, 32, 56);
+    mouse(f, 32, 50);
+    mouse(f, 0, 50, "m");
+    assert.equal(dividerColumn(f.frame()), 50);
 
     const input = new Input();
-    const overlay = f.terminal.fullscreen.showOverlay(input, { width: 20, anchor: "top-right", offsetX: -25 });
+    const overlay = f.terminal.fullscreen.showOverlay(input, { width: 20, anchor: "top-right", offsetX: -40 });
     try {
       f.frame();
-      mouse(f, 0, 67, "M", 1);
+      mouse(f, 0, 50, "M", 1);
       mouse(f, 32, 56, "M", 1);
       mouse(f, 0, 56, "m", 1);
       f.send("z");
@@ -132,18 +153,21 @@ test("only a left-button press on the visible divider enables a resize", async (
     } finally {
       overlay.hide();
     }
-    assert.equal(dividerColumn(f.frame()), 67, "an overlay covering the divider gets the press");
+    assert.equal(dividerColumn(f.frame()), 50, "an overlay covering the divider gets the press");
 
-    mouse(f, 0, 67);
+    mouse(f, 0, 50);
+    mouse(f, 32, 56);
     f.send("\u001b[O");
-    mouse(f, 32, 67);
-    mouse(f, 32, 56);
-    assert.equal(dividerColumn(f.frame()), 67, "focus loss ends the gesture even without release");
+    mouse(f, 32, 60);
+    mouse(f, 0, 60, "m");
+    assert.equal(dividerColumn(f.frame()), 56, "focus loss ends the gesture even without release");
+    assert.deepEqual(f.savedRatios, []);
     assert.equal(f.terminal.host.getFocusedComponent(), f.editor);
-    mouse(f, 0, 67);
-    mouse(f, 32, 56);
-    mouse(f, 0, 56, "m");
-    assert.equal(dividerColumn(f.frame()), 56, "a new press starts a new gesture");
+    mouse(f, 0, 56);
+    mouse(f, 32, 60);
+    mouse(f, 0, 60, "m");
+    assert.equal(dividerColumn(f.frame()), 60, "a new press starts a new gesture");
+    assert.deepEqual(f.savedRatios, [40 / 99]);
   } finally {
     f.stop();
   }
@@ -156,7 +180,7 @@ test("a replaced layout cannot receive further resize updates from its captured 
     await f.set("right", "# Plan");
     const originalSplit = setter.mock.calls[0]?.[0];
     assert.ok(originalSplit);
-    mouse(f, 0, 67);
+    mouse(f, 0, 50);
     mouse(f, 32, 56);
     assert.equal(dividerColumn(f.frame()), 56);
     f.terminal.fullscreen.setLayoutRoot(new Text("Foreign layout", 0, 0));
@@ -164,11 +188,12 @@ test("a replaced layout cannot receive further resize updates from its captured 
     mouse(f, 0, 70, "m");
     assert.match(f.frame().join("\n"), /Foreign layout/u);
     f.terminal.fullscreen.setLayoutRoot(originalSplit);
-    assert.equal(dividerColumn(f.frame()), 56, "a detached split cannot change width");
+    assert.equal(dividerColumn(f.frame()), 50, "a detached split discards its preview");
+    assert.deepEqual(f.savedRatios, []);
     f.switchMode("regular");
     f.switchMode("fullscreen");
     await Promise.resolve();
-    assert.equal(dividerColumn(f.frame()), 67, "a replacement renderer starts at the default width");
+    assert.equal(dividerColumn(f.frame()), 50, "a replacement renderer never inherits an interrupted drag");
   } finally {
     f.stop();
   }
@@ -181,7 +206,7 @@ test("fullscreen split reserves real columns and collapses below either resize t
     assert.doesNotMatch(empty.join("\n"), /│|No completed plan yet/u);
     const [first] = await f.set("right", "# Right pane");
     assert.match(first ?? "", /^history .*│Plan/u);
-    assert.equal(first?.indexOf("│"), 66);
+    assert.equal(first?.indexOf("│"), 49);
     assert.match(f.frame().join("\n"), /main draft/u);
     assert.match((await f.set("left", "# Left pane"))[0] ?? "", /^Plan .*│history/u);
     for (const [width, height, visible] of [
@@ -210,8 +235,8 @@ test("fullscreen split reserves real columns and collapses below either resize t
 });
 
 test.each([
-  { side: "left", divider: 34, resized: 45, planColumn: 10, chatColumn: 90 },
-  { side: "right", divider: 67, resized: 56, planColumn: 90, chatColumn: 10 },
+  { side: "left", divider: 51, resized: 45, planColumn: 10, chatColumn: 90 },
+  { side: "right", divider: 50, resized: 56, planColumn: 90, chatColumn: 10 },
 ] as const)("the resized $side pane preserves editor, overlay and transcript input", async (layout) => {
   const f = setup();
   const overlayInput = new Input();
@@ -271,7 +296,7 @@ test("empty or failed previews do not mount a pane and invalidate a pending moun
       assert.doesNotMatch(f.frame().join("\n"), /│|Pending plan|Cannot read/u);
     }
     assert.equal(setter.mock.calls.length, 0);
-    assert.equal(dividerColumn(await f.set("right", "# Recovered")), 67);
+    assert.equal(dividerColumn(await f.set("right", "# Recovered")), 50);
   } finally {
     f.stop();
   }
@@ -281,8 +306,8 @@ test("manual hiding survives content and placement changes, but only toggles in 
   const f = setup();
   const toggle = () => f.pane.toggle(f.ctx.sessionManager);
   try {
-    assert.equal(dividerColumn(await f.set("right", "# First plan")), 67);
-    mouse(f, 0, 67);
+    assert.equal(dividerColumn(await f.set("right", "# First plan")), 50);
+    mouse(f, 0, 50);
     mouse(f, 32, 56);
     mouse(f, 0, 56, "m");
     assert.equal(dividerColumn(f.frame()), 56);
@@ -293,7 +318,7 @@ test("manual hiding survives content and placement changes, but only toggles in 
     toggle();
     assert.equal(dividerColumn(f.frame()), 0);
     toggle();
-    assert.equal(dividerColumn(f.frame()), 67, "manually reopening resets the divider width");
+    assert.equal(dividerColumn(f.frame()), 56, "manually reopening uses the saved proportion");
     toggle();
     assert.equal(dividerColumn(await f.set("left")), 0);
     assert.equal(dividerColumn(await f.set("off", "# Updated plan")), 0);
@@ -309,7 +334,7 @@ test("manual hiding survives content and placement changes, but only toggles in 
     f.terminal.fullscreen.setLayoutRoot(f.root);
     assert.equal(dividerColumn(f.frame()), 0, "ignored keys do not reopen the pane on a compatible renderer");
     toggle();
-    assert.equal(dividerColumn(f.frame()), 34);
+    assert.equal(dividerColumn(f.frame()), 45);
     assert.match(f.frame().join("\n"), /Updated plan/u);
     assert.equal(f.terminal.host.getFocusedComponent(), f.editor);
   } finally {

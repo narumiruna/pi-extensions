@@ -421,9 +421,9 @@ Read the [settings reference](./docs/settings.md) for all accepted values, tool-
 
 The Plan pane opens only when a Markdown draft or completed plan has content to show. Read-only workflows open it after completion. Press **F4** from the main editor to hide or reopen it on the configured side while the layout has room. Hiding lasts for the current Plan workflow and does not change **Plan pane** in Settings. See [Plan pane settings](docs/settings.md#plan-pane) for shortcut conflicts and limits. Use the mouse wheel over the pane to scroll it without scrolling the conversation.
 
-The pane starts at about one-third of the terminal width. Drag the divider with the left mouse button to resize it on either side without moving keyboard focus. The pane keeps at least 24 columns and the conversation at least 48. The chosen width lasts until the pane closes, moves to the other side, or the fullscreen layout is replaced; it is not saved.
+The pane starts at 50% of the available width, with at least 24 columns for the pane and 48 for the conversation. Drag the divider with the left mouse button to resize without moving keyboard focus. Pi saves the new width as a proportion when you release the divider and reuses it on either side, including after restart.
 
-The pane hides below 80 columns or 12 rows and restores the chosen width when space allows. It is not available in regular mode or on incompatible fullscreen layouts; Plan mode never switches renderer modes for you. Use `/plan show` to read the completed plan in the conversation without a mouse or a pane.
+The pane hides below 80 columns or 12 rows. Narrow terminals may limit the displayed width without changing the saved proportion. It is not available in regular mode or on incompatible fullscreen layouts; Plan mode never switches renderer modes for you. Use `/plan show` to read the completed plan in the conversation without a mouse or a pane.
 
 Plan mode skips unchanged session-state writes, including idle shutdown, while preserving branch-local workflow changes.
 This does not coordinate concurrent writers: do not open the same persisted session in multiple Pi processes.
