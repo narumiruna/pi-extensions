@@ -170,7 +170,7 @@ export function createStartupCheck(
             ctx.ui.notify(
               config && startupTransferEnabled(config)
                 ? `pi-sync automatic transfer stopped: ${safeTerminalText(errorMessage(error))}. Run /sync to review or reconcile retained recovery evidence. No resources were reloaded.`
-                : `pi-sync startup check skipped: ${safeTerminalText(errorMessage(error))}. Run /sync status to retry. No startup transfer was performed.`,
+                : `pi-sync startup check skipped: ${safeTerminalText(errorMessage(error))}. Use View differences in /sync, or ask Pi to recheck in Debug mode. No startup transfer was performed.`,
               "warning",
             );
           } finally {

@@ -39,9 +39,10 @@ export function syncErrorGuidance(error: unknown): string {
     next =
       "Verify the connection address and setup's bucket, branch, or path with your provider; this response alone does not prove which resource is missing.";
   } else if (status !== undefined && status >= 500) {
-    next = "Check your storage provider's service status, then run /sync doctor before syncing.";
+    next = "Check your storage provider's service status, then use /sync diff to review differences before retrying.";
   } else if (/timed out|timeout|request failed|resolve host|Could not resolve|ENOTFOUND|ECONNREFUSED/iu.test(message)) {
-    next = "Check the server address and network connection, then run /sync doctor for the affected setup.";
+    next =
+      "Check the server address and network connection for the affected setup. Use /sync config to review settings.";
   } else if (/strong ETag|If-Match|If-None-Match|precondition|conditional header/iu.test(message)) {
     next =
       "Ask your provider to check strong ETags and conditional writes, including proxy behavior, or choose compatible storage. Do not bypass these safety checks.";
@@ -54,7 +55,7 @@ export function syncErrorGuidance(error: unknown): string {
     next =
       "Correct the named field or item in /sync. If the settings file is invalid, repair it before retrying; do not replace it with defaults.";
   } else {
-    next = "For setup and storage checks, run /sync doctor or choose Diagnostics in /sync.";
+    next = "Use /sync config to review setup settings, and /sync diff to review file differences before retrying.";
   }
   return `${message}\n${next}`;
 }

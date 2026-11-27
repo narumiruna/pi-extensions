@@ -9,7 +9,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
-import { createMockContext } from "./support.js";
+import { bindMockToolLoadout, createMockContext } from "./support.js";
 
 for (const packages of [["sync"], ["statusline"], ["sync", "statusline"]]) {
   test(`package-directory Jiti entries preserve standalone loading and lazy help: ${packages.join(" + ")}`, async () => {
@@ -36,7 +36,7 @@ for (const packages of [["sync"], ["statusline"], ["sync", "statusline"]]) {
       loaded = loader.getExtensions();
       assert.deepEqual(loaded.errors, []);
       assert.equal(loaded.extensions.length, packages.length);
-      // Supply the one core action used by Statusline's session_start hook.
+      bindMockToolLoadout(loaded.runtime);
       loaded.runtime.getThinkingLevel = () => "off";
       for (const extension of loaded.extensions) {
         assert.ok(extension.resolvedPath.endsWith("/dist/index.ts"), extension.resolvedPath);

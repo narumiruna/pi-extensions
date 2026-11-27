@@ -17,10 +17,8 @@ const ordinaryActions = [
   { label: "Pull from remote", route: "pull", description: "Remote → this device; replaces conflicting local files." },
   { label: "Push to remote", route: "push", description: "This device → remote; replaces conflicting remote files." },
   { label: "View differences", route: "diff", description: "Inspect changes; no transfer." },
-  { label: "Check remote status", route: "status", description: "Check remote; no transfer." },
   { label: "Settings", route: undefined, description: "Edit settings, setups, and storage connections." },
-  { label: "History", route: "history", description: "Review snapshots and rollback." },
-  { label: "Diagnostics", route: "doctor", description: "Review backend diagnostics." },
+  { label: "History", route: "history", description: "Review snapshots and recovery options." },
 ] as const;
 
 const pasteStart = "\u001b[200~";
@@ -174,7 +172,7 @@ test("TUI palette shows five label-only choices and only the selected descriptio
       assert.equal(frame.at(-1), "─".repeat(80));
       assert.ok(frame.length <= 25);
       assert.ok(frame.every((line) => visibleWidth(line) <= 80));
-      assert.match(frame.join("\n"), /Search:.*\n8 choices/u);
+      assert.match(frame.join("\n"), /Search:.*\n6 choices/u);
       tui.press("tui.select.down");
     }
     assert.equal(new Set(frames.map((frame) => frame.length)).size, 1, "navigation must not resize the normal frame");
@@ -203,7 +201,7 @@ for (const action of ordinaryActions) {
       const searched = tui.render();
       assertSelectedDescription(searched, action.label);
       assert.equal(choiceRows(searched).length, 1);
-      assert.match(searched.join("\n"), /1 of 8 choices/u);
+      assert.match(searched.join("\n"), /1 of 6 choices/u);
       assert.deepEqual(routes, []);
       tui.press("tui.select.confirm");
       const call = await routeStarted;
@@ -217,12 +215,7 @@ for (const action of ordinaryActions) {
         typeof call.onCommit,
         ["sync", "pull", "push", "history"].includes(action.route) ? "function" : "undefined",
       );
-      if (action.route === "doctor") {
-        assert.equal(confirmations.length, 1);
-        assert.equal(confirmations[0]?.title, "Run diagnostics?");
-        assert.match(confirmations[0]?.body ?? "", /Setup: home/u);
-        assert.ok(confirmations[0]?.signal instanceof AbortSignal);
-      } else assert.deepEqual(confirmations, []);
+      assert.deepEqual(confirmations, []);
       completeRoute({ kind: "completed", outcome: "cancelled" });
       await tui.waitForPending();
       await tui.waitForOpen();
@@ -258,17 +251,26 @@ test("search includes ordinary descriptions and keeps native Backspace and query
   await withPalette(async ({ tui, routes }) => {
     tui.type("both sides");
     assertSelectedDescription(tui.render(), "Sync…");
-    assert.match(tui.render().join("\n"), /1 of 8 choices/u);
+    assert.match(tui.render().join("\n"), /1 of 6 choices/u);
     tui.type("z");
     assert.match(tui.render().join("\n"), /No matching choices; edit search/u);
     tui.send("\u007f");
     assertSelectedDescription(tui.render(), "Sync…");
     tui.send("\u0015");
     assert.equal(choiceRows(tui.render()).length, 5);
-    assert.match(tui.render().join("\n"), /8 choices/u);
+    assert.match(tui.render().join("\n"), /6 choices/u);
     assert.deepEqual(routes, []);
   });
 });
+
+test.each(["Check remote status", "Diagnostics"])("TUI search does not expose the retired %s action", (retired) =>
+  withPalette(async ({ tui, routes }) => {
+    tui.type(retired);
+    assert.match(tui.render().join("\n"), /No matching choices; edit search/u);
+    tui.press("tui.select.confirm");
+    assert.deepEqual(routes, []);
+  }),
+);
 
 for (const chunked of [false, true]) {
   test(`${chunked ? "multi-chunk" : "single-chunk"} bracketed paste never activates navigation, confirm or cancel keys`, async () => {
@@ -285,7 +287,7 @@ for (const chunked of [false, true]) {
       }
       const pasted = tui.render();
       assert.equal(searchQuery(pasted), "xqjk");
-      assert.match(pasted.join("\n"), /0 of 8 choices/u);
+      assert.match(pasted.join("\n"), /0 of 6 choices/u);
       assert.match(pasted.join("\n"), /No matching choices; edit search/u);
       tui.send("\u0015");
       tui.send(`${pasteStart}View differences${pasteEnd}`);
@@ -300,17 +302,13 @@ for (const remapped of [false, true]) {
     await withPalette(
       async ({ tui, routeStarted, completeRoute, routes }) => {
         tui.send(`${pasteStart}no transfer${pasteEnd}`);
-        for (let index = 0; index < 2 && selectedLabel(tui.render()) !== "Check remote status"; index += 1) {
-          if (remapped) tui.send("j");
-          else tui.press("tui.select.down");
-        }
-        assertSelectedDescription(tui.render(), "Check remote status");
+        assertSelectedDescription(tui.render(), "View differences");
         if (remapped) tui.send("x");
         else tui.press("tui.select.confirm");
         const call = await routeStarted;
         await tui.waitForOpen();
-        assert.equal(call.route, "status");
-        assert.match(tui.render().join("\n"), /Checking remote status/u);
+        assert.equal(call.route, "diff");
+        assert.match(tui.render().join("\n"), /Comparing local and remote/u);
         if (remapped) tui.send("q");
         else tui.press("tui.select.cancel");
         assert.equal(call.signal?.aborted, true);
@@ -318,9 +316,9 @@ for (const remapped of [false, true]) {
         await tui.waitForPending();
         await tui.waitForOpen();
         const returned = tui.render();
-        assertSelectedDescription(returned, "Check remote status");
+        assertSelectedDescription(returned, "View differences");
         assert.equal(searchQuery(returned), "no transfer");
-        assert.match(returned.join("\n"), /2 of 8 choices/u);
+        assert.match(returned.join("\n"), /1 of 6 choices/u);
         assert.equal(routes.length, 1);
       },
       remapped ? remappedKeys() : undefined,
@@ -386,7 +384,7 @@ test("short palette keeps the active setup visible while navigating, searching a
 test("palette retains its selected row across normal, narrow, short and zero-width rendering", async () => {
   await withPalette(async ({ tui, component, routes }) => {
     tui.press("end");
-    assertSelectedDescription(tui.render(), "Diagnostics");
+    assertSelectedDescription(tui.render(), "History");
     for (const rows of [28, 12, 8, 6, 4]) {
       for (const width of [80, 20, 5, 1]) {
         const frame = tui.resize({ width, rows });
@@ -413,7 +411,7 @@ test("palette retains its selected row across normal, narrow, short and zero-wid
     }
     tui.resize({ width: 80, rows: 28 });
     tui.invalidate();
-    assertSelectedDescription(tui.render(), "Diagnostics");
+    assertSelectedDescription(tui.render(), "History");
     assert.equal(choiceRows(tui.render()).length, 5);
     assert.deepEqual(routes, []);
   });

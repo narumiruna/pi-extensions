@@ -4,7 +4,7 @@ import path from "node:path";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { ensureDaemon, findDaemon } from "@narumitw/pi-sync-daemon";
 import { test } from "vitest";
-import { createMockContext } from "../../../test/support.js";
+import { bindMockToolLoadout, createMockContext } from "../../../test/support.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 
@@ -24,6 +24,7 @@ test("generated Jiti runtime reviews and stops a daemon through RPC without star
     });
     await loader.reload();
     const loaded = loader.getExtensions();
+    bindMockToolLoadout(loaded.runtime);
     const reviews: string[] = [];
     const { ctx, notifications } = createMockContext({
       mode: "rpc",
@@ -74,6 +75,7 @@ test("generated Jiti runtime loads exclude-enabled settings through a lazy comma
     });
     await loader.reload();
     const loaded = loader.getExtensions();
+    bindMockToolLoadout(loaded.runtime);
     try {
       assert.deepEqual(loaded.errors, []);
       const extension = loaded.extensions.find((extension) => extension.commands.has("sync"));

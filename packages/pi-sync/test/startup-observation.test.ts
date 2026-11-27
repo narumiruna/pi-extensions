@@ -96,7 +96,7 @@ test("manager uses local observation without remote requests and drops it after 
   });
 });
 
-for (const route of ["", "status", "sync --yes", "files", "use work", "migrate-state --yes"]) {
+for (const route of ["", "diff", "sync --yes", "files", "use work", "migrate-state --yes"]) {
   test(`foreground ${route || "manager"} preempts background checking without racing its lock`, async () => {
     await withTempHome(async (agentDir) => {
       await fs.mkdir(agentDir, { recursive: true });
@@ -126,7 +126,7 @@ for (const route of ["", "status", "sync --yes", "files", "use work", "migrate-s
         }),
         loadSyncOperations: async () =>
           ({
-            status: async () => {
+            diff: async () => {
               assert.ok(aborted);
               runs++;
             },
@@ -148,7 +148,7 @@ for (const route of ["", "status", "sync --yes", "files", "use work", "migrate-s
       await entered.promise;
       await mock.commands.get("sync")?.handler(route, context.ctx);
       assert.ok(aborted);
-      assert.equal(runs, ["status", "sync --yes", "use work"].includes(route) ? 1 : 0);
+      assert.equal(runs, ["diff", "sync --yes", "use work"].includes(route) ? 1 : 0);
       assert.equal(context.widgets.get("sync:attention"), undefined);
       assert.ok(context.notifications.every((n) => !/already running|currently running/iu.test(n.message)));
       await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);

@@ -8,7 +8,7 @@ The `/sync` TUI manager uses Kit's public searchable `ChoiceScreen` with at most
 
 The homepage shows setup/storage, cached remote observations, last applied state and relevant automatic-transfer permissions. It does not render scheduler owners, leases, request accounting or candidate limits. Recorded background phases and successful background-transfer timestamps are explicitly historical; neither replaces a fresh remote check. Missing records show **not yet observed**, and unreadable or invalid records show **Unknown**. Last applied does not invent a timestamp or direction.
 
-**Diagnostics** requires backend-probe consent and rechecks the setup fingerprint after confirmation. The direct `/sync doctor` route remains unchanged.
+**View differences** remains an explicit read action. **History** offers repair only when the active WebDAV snapshot is missing from History. It discloses the temporary conditional-write probe and history update before asking for consent and revalidates the reviewed setup and remote head before changing history.
 
 The attention widget retains its labeled muted separator and one body row: **Open /sync to review** with the setup name. It remains passive, preserves collapse state and observation classification, and exposes detailed reasons through the manager and existing notifications. Session replacement, shutdown and stale asynchronous publication retain their existing cleanup guards.
 
@@ -32,9 +32,9 @@ All settings are private to this device. There are no project overrides. Default
 | Merge settings fields | `sync.mergeSettings`, false | Current setup | Immediate save; opt-in merge on subsequent sync with a verified ancestor |
 | Content merge / partial progress | `sync.mergeContent`, `sync.partialSync`, false/false | Current setup | Explicit compatibility review and atomic save; Off, Merge only, Merge + partial, Partial only preserve all combinations |
 | Max file size / Max directory size | `sync.maxFileSizeMiB`, `sync.maxDirectorySizeMiB`, both absent | Current setup | Independent inputs; review before upgrading the settings document to version 9; subsequent transfers only. See [transfer size limits](../skills/configure-pi-sync/references/configuration.md#transfer-size-limits). |
-| Skip secret scan | `skipSecretScan`, false | All setups | Immediate save; subsequent manual/automatic pushes; Diagnostics still scans |
+| Skip secret scan | `skipSecretScan`, false | All setups | Immediate save; subsequent manual/automatic pushes |
 | Show sync status | `showStatus`, true | All setups | Immediate save and immediate status visibility change; notifications/widgets remain |
-| Debug mode | `debug`, false | All setups | Immediate save; Pi logging and timing display use the next session start in TUI/RPC; daemon log uses the next owner or job boundary |
+| Debug mode | `debug`, false | All setups | Immediate save; Pi logging, timing display, and `pi_sync_debug` use the next TUI/RPC session start or `/reload`; daemon log uses the next owner or job boundary |
 
 Opening foreground Settings cancels and drains startup work. Simple changes report saving, then one setting-specific confirmation or an error in Pi's notifications. Back does not undo successful saves; cancelling a draft or compatibility review leaves that change unsaved. In a transfer-size input or its version-upgrade review, Ctrl+C discards the draft and closes the `/sync` flow; ordinary cancellation returns to Settings. A failed save retains the previous document and effective/displayed value. Completed transfers are never undone by changing a preference.
 
@@ -83,7 +83,7 @@ RPC and the TUI harness verify this ordering. The native Fedora/tmux flow from [
 
 ## Review boundaries
 
-This change does not touch model prompts, tool exposure, shared-terminal handoff, settings formats, credentials, or default sync policies. Existing startup/session signals and Kit/custom-interaction disposal own new UI calls. Any awaited review is followed by owner validation, and each mutating operation revalidates its mutable inputs before its existing commit boundary. Status and differences actions use existing routes; manager opening/refresh remains observational and does not contact the remote. Diagnostics discloses its WebDAV write/repair behavior before execution.
+Manager opening and refresh remain observational and do not contact remote storage. Existing startup/session signals and Kit/custom-interaction disposal own the UI calls. After a review, operations validate the session owner and revalidate mutable inputs before committing. Registering `pi_sync_debug` does not add prompt context or change other tool definitions. The active tool list changes only at a session boundary when the saved Debug mode or mode eligibility changes.
 
 ## Quiet footer presentation
 

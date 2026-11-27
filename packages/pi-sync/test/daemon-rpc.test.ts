@@ -80,7 +80,7 @@ describe("resource reload after a changed WebDAV pull", () => {
         assert.equal(await fs.readFile(file, "utf8"), original);
       }
       await client.call({ type: "get_state" });
-      await client.command("/sync status", () => false);
+      await client.command("/sync diff", () => false);
       assert.equal(client.sessionStarts, starts + (accept ? 1 : 0));
       assert.equal(owned.requests.length, 0);
     });
@@ -247,11 +247,11 @@ describe("request prefixes and session replacement", () => {
     }),
   );
 
-  test("sync status preserves real Pi request prefixes and ordered tools", async () => {
+  test("sync diff preserves real Pi request prefixes and ordered tools", async () => {
     const { requests, storage } = owned;
     await client.prompt("prefix one");
     const before = await client.call({ type: "get_messages" });
-    await client.call({ type: "prompt", message: "/sync status" });
+    await client.call({ type: "prompt", message: "/sync diff" });
     assert.deepEqual(await client.call({ type: "get_messages" }), before);
     await client.prompt("prefix two");
     assert.equal(requests.length, 2);

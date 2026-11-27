@@ -283,7 +283,7 @@ export async function showSyncSettings(
             id: "skipSecretScan",
             label: "Skip secret scan",
             description:
-              "All setups on this device: skip possible-secret checks on subsequent pushes, including automatic pushes. Other safety checks remain. Diagnostics still scans.",
+              "All setups on this device: skip possible-secret checks on subsequent pushes, including automatic pushes. Other push safety checks remain.",
             currentValue: state.skipSecretScan ? "On" : "Off",
             values: ["On", "Off"],
             action: "skip-secret-scan",

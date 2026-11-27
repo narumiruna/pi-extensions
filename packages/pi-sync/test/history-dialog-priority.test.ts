@@ -246,7 +246,7 @@ test("real manager command forwards History dialog ownership through command exe
         if (tui.render().includes("Manage sync · home")) {
           mainVisits++;
           if (mainVisits === 1) {
-            for (let index = 0; index < 6; index++) tui.press("tui.select.down");
+            tui.type("History");
             tui.press("tui.select.confirm");
           } else tui.press("ctrl+c");
         } else {

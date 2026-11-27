@@ -27,14 +27,8 @@ export async function syncBoth(ctx: ExtensionContext, options: CommandOptions) {
 export async function rollback(ctx: ExtensionContext, options: CommandOptions) {
   await remoteOperation(ctx, "rollback", options);
 }
-export async function status(ctx: ExtensionContext, options: CommandOptions) {
-  await remoteOperation(ctx, "status", options);
-}
 export async function diff(ctx: ExtensionContext, options: CommandOptions) {
   await remoteOperation(ctx, "diff", options);
-}
-export async function doctor(ctx: ExtensionContext, options: CommandOptions) {
-  await remoteOperation(ctx, "doctor", options);
 }
 export async function history(ctx: ExtensionContext, options: CommandOptions) {
   await remoteOperation(ctx, "history", options);

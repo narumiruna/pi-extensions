@@ -27,6 +27,10 @@ export async function createRpcFixture(
     await ensureDaemon(agent);
     return () => stopDaemon(agent);
   },
+  model?: {
+    callTool(request: Record<string, unknown>): { name: string; arguments: object } | undefined;
+    tools?: string;
+  },
 ): Promise<RpcFixture> {
   context.signal.throwIfAborted();
   let root: string | undefined;
@@ -46,11 +50,26 @@ export async function createRpcFixture(
     void (async () => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
-      requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+      const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      requests.push(payload);
+      const tool = model?.callTool(payload);
+      const delta = tool
+        ? {
+            role: "assistant",
+            tool_calls: [
+              {
+                index: 0,
+                id: `check-${requests.length}`,
+                type: "function",
+                function: { name: tool.name, arguments: JSON.stringify(tool.arguments) },
+              },
+            ],
+          }
+        : { role: "assistant", content: "ok" };
       response.writeHead(200, { "content-type": "text/event-stream" });
       const base = { id: "fixture", object: "chat.completion.chunk", created: 0, model: "fixture" };
       response.end(
-        `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\ndata: [DONE]\n\n`,
+        `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: tool ? "tool_calls" : "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\ndata: [DONE]\n\n`,
       );
     })().catch((error) => {
       response.writeHead(500);
@@ -171,7 +190,7 @@ export async function createRpcFixture(
         if (closing) throw new Error("Pi RPC fixture is closing.");
         context.signal.throwIfAborted();
         assert.ok(root);
-        const client = new SyncRpc(root, cwd, extension, sessionDir, signal, sessionFile);
+        const client = new SyncRpc(root, cwd, extension, sessionDir, signal, sessionFile, model?.tools);
         clients.push(client);
         return client;
       });

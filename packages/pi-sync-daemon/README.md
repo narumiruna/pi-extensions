@@ -61,6 +61,8 @@ permission needs review. Connecting alone does not configure a backend or author
 
 Pi starts the service only after configured interactive synchronization is needed or an explicit setup/command authorizes it. Closing Pi detaches that client; the daemon owns the shared lifetime decision. After no registered live client PID remains for that canonical root, a fixed 30-second grace period starts. Explicit CLI `start` without clients follows the same rule. A client arriving before shutdown becomes final cancels automatic exit. `/new`, `/reload`, fork, and resume retain protection while their Pi process is alive. Use `/sync daemon` for status, reviewed old-process handover, and revocation of legacy unattended grants.
 
+The daemon keeps its `status` and `doctor` sync operations for supported IPC peers. The [Pi Sync check-command migration](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/README.md#migrating-from-the-retired-check-commands) applies to the extension's slash commands and menu, not the daemon CLI or those IPC operations.
+
 ## ⚙️ Settings
 
 **Breaking change:** This daemon rejects retired ignore-file settings, v6/v7 snapshots, and pending ignore-file recovery without converting them. Run `/skill:configure-pi-sync` in Pi or follow the [manual recovery guide](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/skills/configure-pi-sync/references/configuration.md#retired-ignore-file-policy).
@@ -79,7 +81,7 @@ Enabling either limit requires settings document version 9 for the whole agent d
 
 The daemon reads the top-level `debug` boolean in `pi-sync.json` for its agent directory (`--root` in the CLI). It defaults to `false`. Use **/sync → Settings → Debug mode** in Pi or edit the settings file. The daemon applies the validated value at its next owner or job boundary; no restart is needed.
 
-When enabled, the owner appends selected lifecycle, startup timing, and job records to the private `<agent-directory>/pi-sync.log`. Filter the JSON lines by `source` to isolate `pi-sync-daemon` records from `pi-sync` client records.
+When enabled, the owner appends selected lifecycle, startup timing, check, and job records to the private `<agent-directory>/pi-sync.log`. Filter the JSON lines by `source` to isolate `pi-sync-daemon` records from `pi-sync` client records.
 
 The file is local-only. Records omit raw errors, credentials, addresses, paths, synced contents, and model data. Logging is best effort, not a recovery journal. Turning it off leaves existing records in place; retention is manual. See the [Pi Sync Debug mode reference](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/skills/configure-pi-sync/references/configuration.md#debug-mode) for cleanup and older snapshots.
 

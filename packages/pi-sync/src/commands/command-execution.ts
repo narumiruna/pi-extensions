@@ -17,7 +17,14 @@ import { trackOperationDialogs } from "../ui/operation-dialogs.js";
 import { startupTransferSummary } from "../ui/sync-behavior.js";
 import { setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
-import { parseOptions, resolveSyncCommand, splitArgs, usage, validateCommandOptions } from "./command.js";
+import {
+  parseOptions,
+  resolveSyncCommand,
+  retiredSyncCommandGuidance,
+  splitArgs,
+  usage,
+  validateCommandOptions,
+} from "./command.js";
 import type { CommandOptions } from "./command-types.js";
 
 export async function executeRecoveryCommand(
@@ -83,6 +90,11 @@ export async function executeCommand(
     const command = await resolveSyncCommand(rawArgs, ctx);
     if (signal?.aborted || !command) return { kind: "completed" };
     const { subcommand, rest } = command;
+    const retired = retiredSyncCommandGuidance(subcommand);
+    if (retired) {
+      ctx.ui.notify(retired, "warning");
+      return { kind: "failed" };
+    }
     if (directionalClient && directionalFingerprint !== undefined) {
       if ((subcommand !== "push" && subcommand !== "pull") || rest.length || !setup || retryRefusal)
         throw new Error("Invalid directional action.");
@@ -155,12 +167,6 @@ export async function executeCommand(
         await showFileSelection(ctx, options.setup, options.signal);
         return { kind: "completed" };
       }
-      case "status": {
-        const operations = await loaders.operations();
-        throwIfAborted(options.signal);
-        await operations.status(ctx, options);
-        return { kind: "completed" };
-      }
       case "diff": {
         const operations = await loaders.operations();
         throwIfAborted(options.signal);
@@ -171,12 +177,6 @@ export async function executeCommand(
         const { showConflicts } = await import("../sync/conflict-review.js");
         throwIfAborted(options.signal);
         await showConflicts(ctx, options);
-        return { kind: "completed" };
-      }
-      case "doctor": {
-        const operations = await loaders.operations();
-        throwIfAborted(options.signal);
-        await operations.doctor(ctx, options);
         return { kind: "completed" };
       }
       case "push": {

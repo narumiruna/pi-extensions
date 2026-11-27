@@ -1,21 +1,20 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { backupLocal } from "@narumitw/pi-sync-daemon/engine/sync/sync-operations";
+import { backupLocal, doctor } from "@narumitw/pi-sync-daemon/engine/sync/sync-operations";
 import { test } from "vitest";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { createMockContext } from "../../../test/support.js";
 import { S3Client } from "../src/backends/s3/s3-client.js";
 import { loadPartialConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import { configuredSessionDir } from "../src/snapshot/session-paths.js";
 import { lockFileExists, readLock, unlock, withLock } from "../src/state/lock.js";
 import { ensureStateDir, lockPath, readState } from "../src/state/sync-state-store.js";
-import sync, {
+import {
   appliedFileHashMap,
   canPullRemoteSessionsOnFirstSync,
   canPullRemoteSettingsOnFirstSync,
@@ -33,8 +32,8 @@ import sync, {
   settingsHashMap,
   snapshotWithoutSessions,
 } from "../src/sync.js";
-import { runRegisteredCommand } from "./daemon-test-helpers.js";
 import { requiredConfig, snapshot, v3S3Settings, withEnv, withTempHome } from "./helpers.js";
+import { MemorySyncBackend } from "./memory-sync-backend.js";
 import { mergeOptions } from "./merge-options.js";
 import { writeOldLock } from "./old-lock-helper.js";
 
@@ -742,97 +741,35 @@ test("readLock treats empty, whitespace, and corrupt lock files as absent", asyn
   });
 });
 
-test("doctor warns when lock metadata is unreadable", async () => {
-  await withTempHome(async () => {
+test.each([
+  ["unreadable", /Operation lock: unreadable/u, "warning"],
+  ["guard", /Operation lock: guard active.*metadata/u, "warning"],
+  ["stale", /Operation lock: stale.*\/sync unlock --stale/u, "warning"],
+  ["live", /Operation lock: held by PID/u, "info"],
+  ["free", /Operation lock: free/u, "info"],
+] as const)("compatibility doctor reports %s lock state", (kind, expected, level) =>
+  withTempHome(async () => {
     await ensureStateDir();
-    writeFileSync(lockPath(), "{broken");
-    const mock = createMockPi();
-    sync(mock.pi);
-    const { ctx, notifications } = createMockContext({ hasUI: true });
-
-    await runRegisteredCommand(mock, ctx, "doctor");
-    assert.match(notifications.at(-1)?.message ?? "", /Operation lock: unreadable/u);
-    assert.equal(notifications.at(-1)?.level, "warning");
-  });
-});
-
-test("doctor warns when a lock guard is active without metadata", async () => {
-  await withTempHome(async () => {
-    await ensureStateDir();
-    mkdirSync(`${lockPath()}.guard`);
-    const mock = createMockPi();
-    sync(mock.pi);
-    const { ctx, notifications } = createMockContext({ hasUI: true });
-
-    await runRegisteredCommand(mock, ctx, "doctor");
-    assert.match(notifications.at(-1)?.message ?? "", /Operation lock: guard active.*metadata/u);
-    assert.equal(notifications.at(-1)?.level, "warning");
-  });
-});
-
-test("doctor warns when a valid lock owner has exited", async () => {
-  await withTempHome(async () => {
-    await ensureStateDir();
-    writeFileSync(
-      lockPath(),
-      JSON.stringify({
-        id: "dead-owner",
-        pid: 2_147_483_647,
-        command: "sync",
-        startedAt: new Date().toISOString(),
-      }),
-    );
-    const mock = createMockPi();
-    sync(mock.pi);
-    const { ctx, notifications } = createMockContext({ hasUI: true });
-
-    await runRegisteredCommand(mock, ctx, "doctor");
-    assert.match(notifications.at(-1)?.message ?? "", /Operation lock: stale.*\/sync unlock --stale/u);
-    assert.equal(notifications.at(-1)?.level, "warning");
-  });
-});
-
-test("doctor reports live and free lock states", async () => {
-  const backend = createServer((_request, response) => {
-    response.writeHead(200);
-    response.end();
-  });
-  await new Promise<void>((resolve) => backend.listen(0, "127.0.0.1", resolve));
-  const address = backend.address();
-  assert.ok(address && typeof address !== "string");
-  try {
-    await withTempHome(async () => {
-      await ensureStateDir();
-      const settings = v3S3Settings();
-      settings.storageConnections.r2.endpoint = `http://127.0.0.1:${address.port}`;
-      writeFileSync(localConfigPath(), JSON.stringify(settings));
+    writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+    if (kind === "unreadable") writeFileSync(lockPath(), "{broken");
+    else if (kind === "guard") mkdirSync(`${lockPath()}.guard`);
+    else if (kind === "stale" || kind === "live") {
       writeFileSync(
         lockPath(),
         JSON.stringify({
-          id: "live-owner",
-          pid: process.pid,
+          id: `${kind}-owner`,
+          pid: kind === "live" ? process.pid : 2_147_483_647,
           command: "sync",
           startedAt: new Date().toISOString(),
         }),
       );
-      const mock = createMockPi();
-      sync(mock.pi);
-      const { ctx, notifications } = createMockContext({ hasUI: true });
-
-      await runRegisteredCommand(mock, ctx, "doctor");
-      assert.match(notifications.at(-1)?.message ?? "", /Operation lock: held by PID/u);
-      assert.equal(notifications.at(-1)?.level, "info");
-
-      await fs.rm(lockPath());
-      await runRegisteredCommand(mock, ctx, "doctor");
-      assert.match(notifications.at(-1)?.message ?? "", /Operation lock: free/u);
-      assert.equal(notifications.at(-1)?.level, "info");
-    });
-  } finally {
-    backend.closeAllConnections();
-    await new Promise<void>((resolve) => backend.close(() => resolve()));
-  }
-});
+    }
+    const { ctx, notifications } = createMockContext({ hasUI: true });
+    await doctor(ctx, mergeOptions, () => new MemorySyncBackend());
+    assert.match(notifications.at(-1)?.message ?? "", expected);
+    assert.equal(notifications.at(-1)?.level, level);
+  }),
+);
 
 test("malformed non-lock JSON remains an explicit error", async () => {
   await withTempHome(async (agentDir) => {

@@ -68,14 +68,11 @@ Explain that **Autonomous sync** and **Continuous sync** are retired and that th
 Inspect only the necessary local metadata and relevant non-secret configuration facts; do not expose raw settings, credentials, session contents, daemon records, journals, or backups in tool output or chat.
 Do not ask the user to paste those contents or execute text copied from them.
 
-For relevant startup, connection, or transfer symptoms, inspect recent [Debug mode log](references/configuration.md#shared-log) records in `<getAgentDir()>/pi-sync.log` (normally `~/.pi/agent/pi-sync.log`) under the agent directory identified above.
-Read only a bounded tail of an existing private regular file; skip it if it is missing, unsafe, symlinked, or hard-linked.
-Parse the JSON lines locally, filter by `source` (`pi-sync` for the client, `pi-sync-daemon` for the daemon), and report only relevant non-secret events and outcomes, never raw log lines.
-Missing records do not rule out a failure; do not enable Debug mode or start a transfer just to collect evidence.
+For relevant startup or transfer symptoms, use `pi_sync_debug` with `latest` if the tool is available. It reads bounded summaries from the [private local log](references/configuration.md#shared-log) without contacting the daemon. Report only relevant outcomes, never raw log lines. Missing records do not rule out a failure; do not enable Debug mode or start a transfer just to collect evidence.
+If the user requests a fresh comparison, use `pi_sync_debug` with `recheck` only when available. Pi asks the user before reading remote metadata and sending a summary to the model. If it is unavailable or the user declines, do not use another tool to make the read. Point the user to **View differences** for a manual file comparison.
 
 Leave operations that Pi Sync requires the user to review in `/sync`, including initial setup, credential and destination changes, reviewed legacy path selection and policy changes, session opt-in, secret-scan bypass, enabling automatic behavior, upgrading the settings document to enable a [transfer size limit](references/configuration.md#transfer-size-limits), and remote policy publication.
 Use the masked credential input in Pi; do not infer transfer or model consent from a settings edit.
-Do not start sync, run `/sync doctor` or backend/network commands, remove locks or recovery evidence, or bypass scan checks.
+Do not start sync, run backend/network commands, remove locks or recovery evidence, or bypass scan checks. Leave any WebDAV history repair to the user in **/sync → History**.
 
-Report what changed or what was verified locally, whether anything remains uncertain, and the next step if blocked.
-State that no sync or remote connectivity check was performed; do not claim a live runtime update without evidence.
+Report what changed or what was verified, whether anything remains uncertain, and the next step if blocked. Distinguish local evidence from a confirmed remote comparison. Do not claim a live runtime update without evidence.

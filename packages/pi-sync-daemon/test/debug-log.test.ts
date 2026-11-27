@@ -6,7 +6,13 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "vitest";
-import { appendDebugEvent, type DebugEvent, debugJobResult, debugOperation } from "../src/engine/debug-log.js";
+import {
+  appendDebugEvent,
+  type DebugEvent,
+  debugJobResult,
+  debugOperation,
+  readLatestDebugCheck,
+} from "../src/engine/debug-log.js";
 import { DEBUG_LOG_FILENAME } from "../src/engine/paths.js";
 
 const operationId = "0123456789abcdef-01234567-89ab-4def-89ab-0123456789ab";
@@ -74,6 +80,35 @@ test("the shared log permits only bounded diagnostic fields", () =>
     if (process.platform !== "win32") assert.equal((await fs.stat(target)).mode & 0o777, 0o600);
   }));
 
+test("the check log filters by setup, tolerates incomplete records, and returns only validated fields", () =>
+  fixture(async (root, target) => {
+    const setupKey = "a".repeat(64);
+    assert.deepEqual(readLatestDebugCheck(root, setupKey), { kind: "no-record" });
+    await assert.rejects(fs.stat(target), { code: "ENOENT" });
+    const summary = { outcome: "failed", reason: "permission" } as const;
+    const check = {
+      event: "check",
+      origin: "recheck",
+      setupKey,
+      summary: { ...summary, private: "unsafe-value" },
+      operationId,
+    } as const;
+    assert.ok(appendDebugEvent(root, "pi-sync-daemon", check));
+    assert.ok(appendDebugEvent(root, "pi-sync-daemon", { ...check, setupKey: "b".repeat(64) }));
+    const original = await fs.readFile(target, "utf8");
+    assert.doesNotMatch(original, /unsafe-value/u);
+    const recorded = JSON.parse(original.split("\n")[0]);
+    const injected = { ...recorded, summary: { ...recorded.summary, reason: "unsafe-reason" } };
+    await fs.appendFile(target, `${JSON.stringify(injected)}\nnot-json\n${JSON.stringify(recorded)}`);
+    assert.deepEqual(readLatestDebugCheck(root, setupKey), {
+      kind: "recorded",
+      check: { origin: "recheck", operationId, summary, time: recorded.time },
+    });
+    assert.deepEqual(readLatestDebugCheck(root, "c".repeat(64)), { kind: "no-record" });
+    await fs.appendFile(target, `\n${"discard this line\n".repeat(8192)}`);
+    assert.deepEqual(readLatestDebugCheck(root, setupKey), { kind: "no-record" });
+  }));
+
 test.each([
   ["push.foreground", { outcome: "applied", message: "private backup path" }, "completed"],
   ["pull.foreground", { outcome: "cancelled" }, "cancelled"],
@@ -93,6 +128,7 @@ test("missing root or a directory at the log path does not interfere with sync",
     assert.equal(appendDebugEvent(unset, "pi-sync", event), false);
     await assert.rejects(fs.stat(unset), { code: "ENOENT" });
     await fs.mkdir(target);
+    assert.deepEqual(readLatestDebugCheck(root, "a".repeat(64)), { kind: "unavailable" });
     assert.equal(appendDebugEvent(root, "pi-sync", event), false);
     assert.deepEqual(await fs.readdir(target), []);
   }));
@@ -102,14 +138,17 @@ test.skipIf(process.platform === "win32")("aliased and non-private log paths ret
     const foreign = path.join(root, "foreign");
     await fs.writeFile(foreign, "preserve", { mode: 0o600 });
     await fs.symlink(foreign, target);
+    assert.deepEqual(readLatestDebugCheck(root, "a".repeat(64)), { kind: "unavailable" });
     assert.equal(appendDebugEvent(root, "pi-sync", event), false);
     await fs.unlink(target);
     await fs.link(foreign, target);
+    assert.deepEqual(readLatestDebugCheck(root, "a".repeat(64)), { kind: "unavailable" });
     assert.equal(appendDebugEvent(root, "pi-sync-daemon", event), false);
     await fs.unlink(target);
     assert.equal(await fs.readFile(foreign, "utf8"), "preserve");
     await fs.writeFile(target, "preserve", { mode: 0o644 });
     await fs.chmod(target, 0o644);
+    assert.deepEqual(readLatestDebugCheck(root, "a".repeat(64)), { kind: "unavailable" });
     assert.equal(appendDebugEvent(root, "pi-sync-daemon", event), false);
     assert.equal(await fs.readFile(target, "utf8"), "preserve");
     const alias = path.join(root, "alias");

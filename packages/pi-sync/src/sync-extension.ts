@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { completeSyncArguments, splitArgs } from "./commands/command.js";
+import { completeSyncArguments, retiredSyncCommandGuidance, splitArgs } from "./commands/command.js";
 import {
   bindPiDaemonClient,
   installPiDaemonHost,
@@ -9,6 +9,7 @@ import {
 import type { AnySyncConfig } from "./settings/settings-types.js";
 import { startupTransferEnabled } from "./sync/agent-policy.js";
 import { autoPushSessions, startSession } from "./sync/automatic-sync.js";
+import { registerPiSyncDebug } from "./sync/debug-tool.js";
 import { combineSignals } from "./sync/signals.js";
 import { createStartupCheck } from "./sync/startup-check.js";
 import { errorMessage } from "./sync/sync-errors.js";
@@ -30,12 +31,22 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
   let initialization = Promise.resolve<AnySyncConfig | false | undefined>(undefined);
   let owner: PiDaemonClient | undefined;
   let ownerManager: ExtensionContext["sessionManager"] | undefined;
+  const exposeDebugTool = registerPiSyncDebug(pi, (ctx) =>
+    owner?.debugEnabled && !sessionAbort.signal.aborted && ownerManager === ctx.sessionManager
+      ? { client: owner, signal: sessionAbort.signal }
+      : undefined,
+  );
 
   pi.registerCommand("sync", {
     description: "Sync Pi settings through Git, WebDAV, R2, or S3-compatible storage",
     getArgumentCompletions: completeSyncArguments,
     handler: async (args, ctx) => {
       if (!ctx.hasUI) throw new Error("/sync requires TUI or RPC mode so results and safety prompts are observable.");
+      const retired = retiredSyncCommandGuidance(splitArgs(args)[0]);
+      if (retired) {
+        ctx.ui.notify(retired, "warning");
+        return;
+      }
       status.bind(ctx);
       const signal = sessionAbort.signal;
       const client = owner;
@@ -193,6 +204,7 @@ export default function sync(pi: ExtensionAPI, dependencies: Partial<SyncDepende
     });
     try {
       const ready = await initialization;
+      if (!signal.aborted && owner === client) exposeDebugTool(client.debugEnabled);
       if (ready === false) {
         client.disableQueueReleaseUI();
         releaseStatus();

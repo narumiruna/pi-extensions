@@ -22,12 +22,13 @@ test("snapshot staging failure leaves the prior latest pointer active", async ()
   });
 });
 
-test("history failure reports the newly published snapshot as active and repairable", async () => {
+test("S3 history failure reports the active snapshot and directs users to a read", async () => {
   await withPublicationHarness({ failHistory: true }, async ({ counts, notifications }) => {
     assert.equal(counts.snapshotPuts, 1);
     assert.equal(counts.latestPuts, 1);
     assert.equal(counts.historyPuts, 1);
     assert.match(notifications(), /Remote snapshot is active, but history could not be updated/);
+    assert.match(notifications(), /History may not list this publication.*\/sync diff/u);
   });
 });
 
@@ -45,7 +46,7 @@ test("post-publication verification reports an observed competing head", async (
     assert.equal(counts.snapshotPuts, 1);
     assert.equal(counts.latestPuts, 1);
     assert.equal(counts.historyPuts, 0);
-    assert.match(notifications(), /changed immediately after push/i);
+    assert.match(notifications(), /changed immediately after push.*\/sync diff/iu);
   });
 });
 

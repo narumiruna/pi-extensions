@@ -88,10 +88,10 @@ test("Sync operation loading rechecks cancellation before invoking a route", asy
     await mkdir(agentDir, { recursive: true });
     const mock = createMockPi();
     let releaseLoad: (() => void) | undefined;
-    let statusCalls = 0;
+    let diffCalls = 0;
     const operations = {
-      status: async () => {
-        statusCalls += 1;
+      diff: async () => {
+        diffCalls += 1;
       },
     } as unknown as Awaited<ReturnType<SyncDependencies["loadSyncOperations"]>>;
     sync(mock.pi, {
@@ -107,14 +107,14 @@ test("Sync operation loading rechecks cancellation before invoking a route", asy
     const command = mock.commands.get("sync");
     assert.ok(command);
 
-    const pending = command.handler("status", first.ctx);
+    const pending = command.handler("diff", first.ctx);
     await waitFor(() => releaseLoad !== undefined);
     const replacement = createMockContext({ hasUI: true, mode: "rpc" });
     await emit(mock, "session_start", { reason: "new" }, replacement.ctx);
     assert.ok(releaseLoad);
     releaseLoad();
     await pending;
-    assert.equal(statusCalls, 0);
+    assert.equal(diffCalls, 0);
   });
 });
 

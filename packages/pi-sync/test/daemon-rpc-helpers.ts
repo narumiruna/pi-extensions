@@ -37,6 +37,7 @@ export class SyncRpc {
     sessionDir?: string,
     private readonly signal?: AbortSignal,
     sessionFile?: string,
+    tools = "read,edit",
   ) {
     signal?.throwIfAborted();
     let ready!: () => void;
@@ -56,8 +57,7 @@ export class SyncRpc {
         "--no-skills",
         "--no-prompt-templates",
         "--no-themes",
-        "--tools",
-        "read,edit",
+        ...(tools ? ["--tools", tools] : []),
         "--provider",
         "sync-rpc-fixture",
         "--model",

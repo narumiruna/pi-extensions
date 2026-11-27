@@ -140,27 +140,6 @@ test("Storage connections list and detail are symmetric and redact credentials",
   });
 });
 
-test("main exposes Diagnostics directly and preserves the doctor route", async () => {
-  await withSettings(async () => {
-    const choices = ["Diagnostics", undefined];
-    const frames: string[] = [];
-    const routes: string[] = [];
-    const { ctx } = createMockContext({
-      hasUI: true,
-      mode: "rpc",
-      select: async (title: string) => {
-        frames.push(title);
-        return choices.shift();
-      },
-    });
-    await showSyncManager(ctx, async (route) => {
-      routes.push(route);
-    });
-    assert.deepEqual(routes, ["doctor"]);
-    assert.match(frames.join("\n"), /Manage sync/u);
-  });
-});
-
 test("the sole current sync setup offers removal to return to an empty catalog", async () => {
   const value = settings();
   delete (value.syncSetups as Record<string, unknown>).work;
