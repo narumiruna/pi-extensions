@@ -831,8 +831,6 @@
 "packages/pi-inline/src/badge.ts"	a923a18d75d8716239cb3157542aa3af30fbcbef03af35bf6ca484d3412d06b1
 "packages/pi-inline/src/external-link-marker.ts"	46e03ae7f2b647adf5bb853e82d4c974faba91083650303c16f9bccf87f9e7bc
 "packages/pi-inline/src/external-link-marker.ts"	55ccd751ce21c2357dcf3d2a3adf3c51ab2e219ae1af85b6b9b6fc688e21261f
-"packages/pi-inline/src/external-link-marker.ts"	b3aa852bf16f4f637827b9eaa29d61955e5a6b9f5c6077625e7cb0bb8ca84b1d
-"packages/pi-inline/src/external-link-marker.ts"	c6c91407b09392b61becdeece798b0082a62607adcefd3ac93a0b755921d8ea6
 "packages/pi-inline/src/filelinks.ts"	16fa9dd367661a98622c11830dceadf408fb2a846edd36a67fcf6e3ef89d178d
 "packages/pi-inline/src/filelinks.ts"	1e7ad2fe4726561df15c9a326d65fe99fc611b5f6b3af28fdd9571af6de1f8f5
 "packages/pi-inline/src/filelinks.ts"	2e4b195168782806f910c80bd5f51d1c8c033707e324d7997bdffd0cb5d419c5
@@ -863,7 +861,6 @@
 "packages/pi-inline/src/inline-markup-extension.ts"	5723a281b8dfe39bb2c3821f7412d9edc8e1b4425b634ce464f24e22c048a104
 "packages/pi-inline/src/inline-markup-extension.ts"	7110e89e946b29e334f99fe58a6e88556c3e5a2395146d9f3bc5a6372fd29b04
 "packages/pi-inline/src/inline-markup-extension.ts"	ec329316ad56d2a4c1fa59ac14a719c4524f23b664cb5d2967e2a03f4632a6a7
-"packages/pi-inline/src/inline-markup.ts"	39106c8773f0884fef9905cdb689056d512d90b0ca17be85aede4dedc416bf12
 "packages/pi-inline/src/inline-markup.ts"	4bf452cd36c88bd09b86d7b7a1be86958947f392d14c32948d325cfcda5973c9
 "packages/pi-inline/src/inline-markup.ts"	61aaf00e288e3b43e6f95743b51d6843a63fda53c55eea98b6bbf03a861968df
 "packages/pi-inline/src/inline-markup.ts"	9c3ce9e0c836b99572439b797cc250d90354271cb3f59fbef7da7b2e76ce54cf

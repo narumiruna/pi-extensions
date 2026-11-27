@@ -3,42 +3,27 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import {
-  type BeforeAgentStartEvent,
-  type ExtensionAPI,
-  type ExtensionCommandContext,
-  type ExtensionContext,
-  type ExtensionHandler,
-  type ExtensionUIContext,
-  getMarkdownTheme,
-  initTheme,
-  type MarkdownTransformContext,
-  type MarkdownTransformer,
-  type SessionShutdownEvent,
-  type SessionStartEvent,
-} from "@earendil-works/pi-coding-agent";
-import {
-  type Component,
   getCellDimensions,
   getOsc8LinkAtColumn,
   Markdown,
   Marked,
   type OverlayHandle,
   ProcessTerminal,
-  rgbColor,
   setCapabilityOverrides,
   setCellDimensions,
   stripTerminalSequences,
   type TUI,
   TuiAltScreen,
-  TuiMainScreen,
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
 import { classifyLinkPath, parseLineRange, readExcerpt, renderFilePreview } from "../src/filelinks.js";
 import { prepareImagePreview, previewImageMime } from "../src/image-preview.js";
-import { showInlineSettings } from "../src/settings-menu.js";
+import type { showInlineSettings } from "../src/settings-menu.js";
+import { previewTheme, startInlineSession, stubRawInput } from "./inline-session-fixture.js";
 
 vi.mock("node:fs/promises", { spy: true });
 vi.mock("../src/filelinks.js", { spy: true });
@@ -69,84 +54,7 @@ afterAll(async () => {
   await rm(fixtureRoot, { recursive: true, force: true });
 });
 
-const previewTheme = {
-  colors: new Proxy({}, { get: () => rgbColor(88, 60, 137) }),
-  getBgAnsi: () => "",
-  fg: (_color: string, text: string) => text,
-  bg: (_color: string, text: string) => text,
-  style: (text: string) => text,
-} as unknown as ExtensionUIContext["theme"];
-
-async function startSession(tui: TUI = new TuiMainScreen(new ProcessTerminal())) {
-  const on = vi.fn<(event: string, handler: unknown) => void>();
-  const registerMarkdownTransformer = vi.fn<(transform: MarkdownTransformer) => void>();
-  const registerCommand = vi.fn<ExtensionAPI["registerCommand"]>();
-  extension({ on, registerCommand, registerMarkdownTransformer } as unknown as ExtensionAPI);
-  const start = on.mock.calls.find(([event]) => event === "session_start")?.[1] as ExtensionHandler<SessionStartEvent>;
-  const shutdown = on.mock.calls.find(
-    ([event]) => event === "session_shutdown",
-  )?.[1] as ExtensionHandler<SessionShutdownEvent>;
-  const beforeAgentStart = on.mock.calls.find(
-    ([event]) => event === "before_agent_start",
-  )?.[1] as ExtensionHandler<BeforeAgentStartEvent>;
-  const invalidate = vi.spyOn(tui, "invalidate");
-  const requestRender = vi.spyOn(tui, "requestRender").mockImplementation(() => {});
-  let widget: (Component & { dispose?(): void }) | undefined;
-  const setWidget = vi.fn<ExtensionUIContext["setWidget"]>((_key, content) => {
-    widget?.dispose?.();
-    widget = typeof content === "function" ? content(tui, previewTheme) : undefined;
-  });
-  const settings = vi.mocked(showInlineSettings).mockReset().mockResolvedValue(false);
-  const ctx = { cwd: fixtureRoot, mode: "tui", ui: { setWidget } } as unknown as ExtensionCommandContext;
-  const startWidget = () => start({ type: "session_start", reason: "startup" }, ctx);
-  await startWidget();
-  const commands = new Map(registerCommand.mock.calls);
-  expect([...commands.keys()]).toEqual(["inline", "inline-markup"]);
-  expect(registerMarkdownTransformer).toHaveBeenCalledOnce();
-  expect(setWidget).toHaveBeenCalledOnce();
-  const [[transform]] = registerMarkdownTransformer.mock.calls;
-
-  return {
-    invalidate,
-    requestRender,
-    settings,
-    setWidget,
-    startWidget,
-    renderWidget: (width: number) => widget?.render(width) ?? [],
-    runCommand: (args = "", mode: ExtensionContext["mode"] = "tui", route = "inline") =>
-      commands.get(route)?.handler(args, { ...ctx, mode }),
-    setWikilinks(enabled: boolean) {
-      settings.mockImplementationOnce(async (_ctx, { setWikilinks }) => {
-        setWikilinks(enabled);
-        return false;
-      });
-      return commands.get("inline")?.handler("", ctx);
-    },
-    render(markdown: string, messageType: MarkdownTransformContext["messageType"] = "user") {
-      return transform(markdown, { messageType, isStreaming: false, availableWidth: 80 });
-    },
-    async promptSections(mode: ExtensionContext["mode"] = "tui") {
-      const systemPromptOptions: BeforeAgentStartEvent["systemPromptOptions"] = {
-        cwd: ctx.cwd,
-        selectedTools: [],
-        hiddenTools: [],
-        toolSnippets: {},
-        toolGuidelines: {},
-        promptGuidelines: [],
-        appendSystemPrompt: "",
-        sections: { other: "Keep this section." },
-        contextFiles: [],
-        skills: [],
-      };
-      await beforeAgentStart(
-        { type: "before_agent_start", messageType: "user", prompt: "test", systemPrompt: "", systemPromptOptions },
-        { ...ctx, mode },
-      );
-      return systemPromptOptions.sections;
-    },
-    stop: () => shutdown({ type: "session_shutdown", reason: "quit" }, ctx),
-  };
-}
+const startSession = (tui?: TUI) => startInlineSession(extension, fixtureRoot, tui);
 
 test("adds generic formatting guidance only while the TUI widget is active", async ({ onTestFinished }) => {
   const session = await startSession();
@@ -298,6 +206,40 @@ test("dismisses a pending menu on replacement and ignores its late answer", asyn
   await command;
   await session.runCommand();
   expect(session.settings).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ wikilinks: false }));
+});
+
+test("compares native and decorated click destinations for README links", async ({ onTestFinished }) => {
+  const session = await startSession();
+  onTestFinished(session.stop);
+  const path = join(fixtureRoot, "README.md");
+  const fileUrl = pathToFileURL(path).href;
+  for (const [href, expected] of [
+    ["./README.md#快速開始", fileUrl],
+    ["./README.md#L5", fileUrl],
+    ["./README.md", "./README.md"],
+    [`${path}#快速開始`, fileUrl],
+    [path, path],
+    [fileUrl, fileUrl],
+    [`${fileUrl}#L5`, `${fileUrl}#L5`],
+    ["./README.md#", "./README.md#"],
+    ["./README.md?view=source#L5", "./README.md?view=source#L5"],
+    ["./README.md?#L5", "./README.md?#L5"],
+    ["#L5", "#L5"],
+    ["https://example.test/README.md#L5", "https://example.test/README.md#L5"],
+    ["//example.test/README.md#L5", "//example.test/README.md#L5"],
+    ["custom:README.md#L5", "custom:README.md#L5"],
+    ["./node_modules/README.md#L5", "./node_modules/README.md#L5"],
+    ["./\uD800.md#L5", "./\uD800.md#L5"],
+    ["./notes%20%E7%AD%86%E8%A8%98%23v1.md#heading?literal", pathToFileURL(join(fixtureRoot, "notes 筆記#v1.md")).href],
+  ]) {
+    const source = `[Note](${href})`;
+    const clickUrl = (markdown: string) => {
+      const [row] = new Markdown(markdown, 0, 0, getMarkdownTheme()).render(180);
+      return getOsc8LinkAtColumn(row, 0);
+    };
+    expect(clickUrl(source), href).toBe(href);
+    expect(clickUrl(session.render(source)), href).toBe(expected);
+  }
 });
 
 test.for(["[[README.md]]", "[[[README](./README.md)]]", "[[[README]]](./README.md)"])(
@@ -563,15 +505,6 @@ test("stops resolving a preview path after abort", async ({ onTestFinished }) =>
   expect(stat).not.toHaveBeenCalled();
 });
 
-function stubRawInput(): () => void {
-  const raw = Object.getOwnPropertyDescriptor(process.stdin, "isRaw");
-  Object.defineProperty(process.stdin, "isRaw", { configurable: true, value: true });
-  return () => {
-    if (raw) Object.defineProperty(process.stdin, "isRaw", raw);
-    else Reflect.deleteProperty(process.stdin, "isRaw");
-  };
-}
-
 test.for(["leave", "dispose", "resize", "show and leave"] as const)(
   "handles hover preview action: %s",
   async (action, { onTestFinished }) => {
@@ -624,6 +557,7 @@ test.for([
   ["[[[`readExcerpt()`](./example.ts#L2-L3)]]", "\uE0B6\u00a0readExcerpt()\u00a0\uE0B4", "example.ts"],
   ["[[[readExcerpt()]]](./example.ts#L2-L3)", "\uE0B6\u00a0readExcerpt()\u00a0\uE0B4", "example.ts"],
   ["[CI workflow](./.github/workflows/ci.yml#L2-L3)", "📄\u00a0CI workflow", ".github/workflows/ci.yml"],
+  ["[Notes](./notes%20%E7%AD%86%E8%A8%98%23v1.md#L2-L3)", "📄\u00a0Notes", "notes 筆記#v1.md"],
 ] as const)("hovers the line-range link %s", async ([link, label, file], { onTestFinished }) => {
   const path = join(fixtureRoot, file);
   await mkdir(dirname(path), { recursive: true });
@@ -645,7 +579,7 @@ test.for([
   const screen = new Markdown(session.render(link), 0, 0, getMarkdownTheme()).render(80);
   expect(stripTerminalSequences(screen[0]).trimEnd()).toBe(label);
   for (const col of [0, visibleWidth(label) - 1]) {
-    expect(getOsc8LinkAtColumn(screen[0], col)).toBe(`./${file}#L2-L3`);
+    expect(getOsc8LinkAtColumn(screen[0], col)).toBe(pathToFileURL(path).href);
   }
   vi.spyOn(tui, "getScreenLines").mockImplementation(() => [...screen]);
 
@@ -915,7 +849,8 @@ test("cancels a pending image read when the session widget is replaced", async (
   const tui = new TuiAltScreen(terminal);
   const session = await startSession(tui);
   onTestFinished(session.stop);
-  const screen = new Markdown(session.render("[Cat Photo](./cat.png)"), 0, 0, getMarkdownTheme()).render(80);
+  const screen = new Markdown(session.render("[Cat Photo](./cat.png#frame)"), 0, 0, getMarkdownTheme()).render(80);
+  expect(getOsc8LinkAtColumn(screen[0], 0)).toBe(pathToFileURL(join(fixtureRoot, "cat.png")).href);
   vi.spyOn(tui, "getScreenLines").mockImplementation(() => [...screen]);
   const overlay = vi.spyOn(tui, "showOverlay");
   const pending = Promise.withResolvers<string>();

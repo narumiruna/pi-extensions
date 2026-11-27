@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, parse } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   CONFIG_DIR_NAME,
   type ExtensionAPI,
@@ -178,12 +179,13 @@ test.for([true, false])(
     clearIo();
     const href = `${plans}/rename%20plan.md#L2-L3`;
     const relative = "../plans/rename%20plan.md#L2-L3";
+    const url = pathToFileURL(plan).href;
     for (const [source, link, label] of [
-      [`[rename plan](${href})`, href, "📄\u00a0rename plan"],
-      [`[rename plan](${relative})`, relative, "📄\u00a0rename plan"],
-      ["[rename plan](<../plans/rename plan.md#L2-L3>)", "../plans/rename plan.md#L2-L3", "📄\u00a0rename plan"],
-      [`[[[rename plan](${relative})]]`, relative, "\uE0B6\u00a0rename\u00a0plan\u00a0\uE0B4"],
-      [`[[[rename plan]]](${href})`, href, "\uE0B6\u00a0rename\u00a0plan\u00a0\uE0B4"],
+      [`[rename plan](${href})`, url, "📄\u00a0rename plan"],
+      [`[rename plan](${relative})`, url, "📄\u00a0rename plan"],
+      ["[rename plan](<../plans/rename plan.md#L2-L3>)", url, "📄\u00a0rename plan"],
+      [`[[[rename plan](${relative})]]`, url, "\uE0B6\u00a0rename\u00a0plan\u00a0\uE0B4"],
+      [`[[[rename plan]]](${href})`, url, "\uE0B6\u00a0rename\u00a0plan\u00a0\uE0B4"],
       ["[Workspace](./README.md)", "./README.md", "📄\u00a0Workspace"],
       ["[Photo](../plans/image.png)", "../plans/image.png", "🖼️\u00a0Photo"],
     ]) {
@@ -325,7 +327,12 @@ test("does not read external targets from unsigned or changed links, images, or 
   const signed = session.link("[Note](../plans/rename%20plan.md)");
   session.screen.mockReturnValue([signed.replace("rename%20plan.md", "other.txt")]);
   await session.hover();
-  for (const href of ["../plans/image.png", "../node_modules/dependency.md", "https://example.test/a.md"]) {
+  for (const href of [
+    "../plans/image.png",
+    "../plans/image.png#heading",
+    "../node_modules/dependency.md#L2",
+    "https://example.test/a.md#L2",
+  ]) {
     session.link(`[Note](${href})`);
     await session.hover();
   }

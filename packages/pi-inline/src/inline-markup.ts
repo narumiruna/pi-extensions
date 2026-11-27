@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, hyperlink, Marked } from "@earendil-works/pi-tui";
 import { cleanBadgeLabel, renderBadge } from "./badge.js";
-import type { createExternalLinkMarker } from "./external-link-marker.js";
+import type { createLinkMarker } from "./external-link-marker.js";
 import { classifyLinkPath } from "./filelinks.js";
 import { previewImageMime } from "./image-preview.js";
 import type { createWikilinks } from "./wikilinks.js";
@@ -61,14 +61,13 @@ function isWrappedLink(source: string, offset: number, end: number): boolean {
   );
 }
 
-/** Styles prose badges and local Markdown links without changing their destinations. */
 export function renderInlineMarkup(
   markdown: string,
   root: string,
   theme: Theme,
   userMessage: boolean,
-  wiki?: ReturnType<typeof createWikilinks>,
-  externalLinkMarker?: ReturnType<typeof createExternalLinkMarker>,
+  wiki: ReturnType<typeof createWikilinks> | undefined,
+  linkMarker: ReturnType<typeof createLinkMarker>,
 ): string {
   if (!markdown.includes("[[") && !markdown.includes("](")) return markdown;
 
@@ -128,7 +127,7 @@ export function renderInlineMarkup(
     const href = untag(token.href);
     const target = classifyLinkPath(root, href);
     if (!token.text.startsWith(start.marker) || !target) return;
-    const mark = (text: string) => (target.kind === "external" ? (externalLinkMarker?.mark(text, href) ?? text) : text);
+    const mark = (text: string) => linkMarker.mark(text, href, target);
     const { offset } = start;
     const end = offset + untag(token.raw).length;
     if (start.linkedBadge !== undefined) {
