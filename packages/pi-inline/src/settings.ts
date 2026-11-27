@@ -10,8 +10,20 @@ export type PromptHintSettings = { enabled: boolean; text: string };
 export type PromptHintChange = { key: "promptHintEnabled"; value: boolean } | { key: "promptHintText"; value: string };
 
 export const DEFAULT_PROMPT_HINT: PromptHintSettings = Object.freeze({ enabled: true, text: INLINE_FORMATTING_PROMPT });
+export const CODE_BLOCK_COPY_MODES = ["click", "button", "off"] as const;
+export type CodeBlockCopyMode = (typeof CODE_BLOCK_COPY_MODES)[number];
+export const DEFAULT_CODE_BLOCK_COPY_MODE = "button";
+export const CODE_BLOCK_COPY_BUTTON_POSITIONS = ["left", "right"] as const;
+export type CodeBlockCopyButtonPosition = (typeof CODE_BLOCK_COPY_BUTTON_POSITIONS)[number];
+export const DEFAULT_CODE_BLOCK_COPY_BUTTON_POSITION = "left";
 
-type PromptSettings = { prompt: PromptHintSettings; saveBlocked?: true };
+type InlineSettings = {
+  prompt: PromptHintSettings;
+  codeBlockCopyMode: CodeBlockCopyMode;
+  codeBlockCopyButtonPosition: CodeBlockCopyButtonPosition;
+  saveBlocked?: true;
+};
+type SettingsKey = PromptHintChange["key"] | "codeBlockCopyMode" | "codeBlockCopyButtonPosition";
 type SettingsDocument = Record<string, unknown>;
 
 type DocumentSnapshot = { document: SettingsDocument; source?: string; stat?: BigIntStats };
@@ -87,6 +99,35 @@ function readPromptHint(document: SettingsDocument): PromptHintSettings | undefi
   return typeof enabled === "boolean" && text !== undefined ? { enabled, text } : undefined;
 }
 
+export function isCodeBlockCopyMode(value: unknown): value is CodeBlockCopyMode {
+  return CODE_BLOCK_COPY_MODES.includes(value as CodeBlockCopyMode);
+}
+
+function isCodeBlockCopyButtonPosition(value: unknown): value is CodeBlockCopyButtonPosition {
+  return CODE_BLOCK_COPY_BUTTON_POSITIONS.includes(value as CodeBlockCopyButtonPosition);
+}
+
+function resolveSettings(document: SettingsDocument | undefined): InlineSettings {
+  const prompt = document && readPromptHint(document);
+  const mode =
+    document &&
+    (Object.hasOwn(document, "codeBlockCopyMode") ? document.codeBlockCopyMode : DEFAULT_CODE_BLOCK_COPY_MODE);
+  const position =
+    document &&
+    (Object.hasOwn(document, "codeBlockCopyButtonPosition")
+      ? document.codeBlockCopyButtonPosition
+      : DEFAULT_CODE_BLOCK_COPY_BUTTON_POSITION);
+  const validMode = isCodeBlockCopyMode(mode);
+  const validPosition = isCodeBlockCopyButtonPosition(position);
+  const settings: InlineSettings = {
+    prompt: prompt ?? { ...DEFAULT_PROMPT_HINT },
+    codeBlockCopyMode: prompt && validMode ? mode : "off",
+    codeBlockCopyButtonPosition: validPosition ? position : DEFAULT_CODE_BLOCK_COPY_BUTTON_POSITION,
+  };
+  if (!prompt || !validMode || !validPosition) settings.saveBlocked = true;
+  return settings;
+}
+
 async function readSettings(signal: AbortSignal): Promise<SettingsDocument | undefined> {
   if (signal.aborted) return undefined;
   const path = settingsPath();
@@ -98,15 +139,19 @@ async function readSettings(signal: AbortSignal): Promise<SettingsDocument | und
   }
 }
 
-export async function loadPromptSettings(signal: AbortSignal): Promise<PromptSettings> {
+export async function loadPromptSettings(signal: AbortSignal): Promise<InlineSettings> {
   const document = await readSettings(signal);
-  const defaults = { prompt: { ...DEFAULT_PROMPT_HINT } };
-  if (signal.aborted) return defaults;
-  const prompt = document && readPromptHint(document);
-  return prompt ? { prompt } : { ...defaults, saveBlocked: true };
+  if (signal.aborted) {
+    return {
+      prompt: { ...DEFAULT_PROMPT_HINT },
+      codeBlockCopyMode: "off",
+      codeBlockCopyButtonPosition: DEFAULT_CODE_BLOCK_COPY_BUTTON_POSITION,
+    };
+  }
+  return resolveSettings(document);
 }
 
-function editPromptSetting(source: string | undefined, key: PromptHintChange["key"], value: boolean | string): string {
+function editSetting(source: string | undefined, key: SettingsKey, value: boolean | string): string {
   if (source === undefined) return `${JSON.stringify({ [key]: value }, null, 2)}\n`;
 
   // The source already passed strict JSON validation. Edit the last matching property
@@ -182,29 +227,65 @@ export async function savePromptHint(
 ): Promise<boolean> {
   if (signal.aborted) return false;
   const { key } = change;
-  const enabled = key === "promptHintEnabled";
-  const value = key === "promptHintText" ? normalizePromptText(change.value) : change.value;
-  if (enabled) {
-    if (typeof value !== "boolean") throw new Error("Select On or Off for the prompt hint.");
-  } else if (key !== "promptHintText" || value === undefined) {
+  if (key === "promptHintEnabled") {
+    if (typeof change.value !== "boolean") throw new Error("Select On or Off for the prompt hint.");
+    return saveSetting(key, expected.enabled, change.value, signal);
+  }
+  const value = normalizePromptText(change.value);
+  if (key !== "promptHintText" || value === undefined) {
     throw new Error("Enter a nonblank prompt hint without terminal or bidirectional controls.");
   }
-  const baseline = enabled ? expected.enabled : expected.text;
+  return saveSetting(key, expected.text, value, signal);
+}
+
+export async function saveCodeBlockCopyMode(
+  expected: CodeBlockCopyMode,
+  value: CodeBlockCopyMode,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (signal.aborted) return false;
+  if (!isCodeBlockCopyMode(value)) throw new Error("Select Click block, Copy button, or Off for code block copy.");
+  return saveSetting("codeBlockCopyMode", expected, value, signal);
+}
+
+export async function saveCodeBlockCopyButtonPosition(
+  expected: CodeBlockCopyButtonPosition,
+  value: CodeBlockCopyButtonPosition,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (signal.aborted) return false;
+  if (!isCodeBlockCopyButtonPosition(value)) {
+    throw new Error("Select Left or Right for the code block copy button position.");
+  }
+  return saveSetting("codeBlockCopyButtonPosition", expected, value, signal);
+}
+
+async function saveSetting(
+  key: SettingsKey,
+  baseline: boolean | string,
+  value: boolean | string,
+  signal: AbortSignal,
+): Promise<boolean> {
   const path = settingsPath();
   let fail = repair;
   try {
     return await inSettingsQueue(path, async () => {
       const snapshot = await readDocument(path, signal);
       if (signal.aborted) return false;
-      const prompt = readPromptHint(snapshot.document);
-      if (!prompt) throw new Error();
-      const current = enabled ? prompt.enabled : prompt.text;
+      const settings = resolveSettings(snapshot.document);
+      if (settings.saveBlocked) throw new Error();
+      const current = {
+        promptHintEnabled: settings.prompt.enabled,
+        promptHintText: settings.prompt.text,
+        codeBlockCopyMode: settings.codeBlockCopyMode,
+        codeBlockCopyButtonPosition: settings.codeBlockCopyButtonPosition,
+      }[key];
       if (current !== baseline) {
         fail = stale;
         throw new Error();
       }
       if (value === current) return false;
-      const updated = editPromptSetting(snapshot.source, key, value);
+      const updated = editSetting(snapshot.source, key, value);
       fail = writeFailed;
       const published = await publishDocument(path, snapshot, updated, signal);
       if (!published) {

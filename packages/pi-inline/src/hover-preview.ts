@@ -52,6 +52,7 @@ export function createHoverPreview(
   cwd: string,
   findWikiPreview: (href: string) => WikiPreview | undefined,
   marker: LinkMarker,
+  copy?: { observe(data: string): void; clearGesture(): void },
 ): Component & { dismiss(): void; dispose(): void } {
   let hover: Hover | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -197,10 +198,16 @@ export function createHoverPreview(
   // Pi consumes mouse reports before extension input listeners. Observe stdin
   // without replacing Pi's handler, taking focus, or changing terminal modes.
   const input = new StdinBuffer();
-  input.on("data", observe);
-  input.on("paste", hide);
+  input.on("data", (data) => {
+    copy?.observe(data);
+    if (tui instanceof TuiAltScreen) observe(data);
+  });
+  input.on("paste", () => {
+    copy?.clearGesture();
+    hide();
+  });
   const onData = (data: string | Buffer) => {
-    if (!disposed && process.stdin.isRaw && tui instanceof TuiAltScreen) input.process(data);
+    if (!disposed && process.stdin.isRaw && tui.mode === "fullscreen") input.process(data);
   };
   process.stdin.on("data", onData);
 

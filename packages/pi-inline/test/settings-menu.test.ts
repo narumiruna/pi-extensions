@@ -41,6 +41,10 @@ async function openMenu(options: Partial<MenuOptions> = {}, bindings?: Keybindin
   const notify = vi.fn();
   const setWikilinks = vi.fn();
   const save = vi.fn<MenuOptions["save"]>().mockResolvedValue(true);
+  const saveCodeBlockCopyMode = vi.fn<MenuOptions["saveCodeBlockCopyMode"]>().mockResolvedValue(true);
+  const saveCodeBlockCopyButtonPosition = vi
+    .fn<MenuOptions["saveCodeBlockCopyButtonPosition"]>()
+    .mockResolvedValue(true);
   const closed = vi.fn();
   const requestRender = vi.fn();
   const terminal = { rows: 24 };
@@ -74,6 +78,11 @@ async function openMenu(options: Partial<MenuOptions> = {}, bindings?: Keybindin
     saved: { enabled: true, text: "Original" },
     active: { enabled: true, text: "Original" },
     saveBlocked: false,
+    codeBlockCopyMode: "button",
+    codeBlockCopyButtonPosition: "left",
+    canCopyCodeBlocks: true,
+    saveCodeBlockCopyMode,
+    saveCodeBlockCopyButtonPosition,
     setWikilinks,
     save,
     ...options,
@@ -82,7 +91,19 @@ async function openMenu(options: Partial<MenuOptions> = {}, bindings?: Keybindin
   const send = (...keys: string[]) => {
     for (const data of keys) component.handleInput?.(data);
   };
-  return { component, terminal, result, send, closed, notify, requestRender, setWikilinks, save };
+  return {
+    component,
+    terminal,
+    result,
+    send,
+    closed,
+    notify,
+    requestRender,
+    setWikilinks,
+    save,
+    saveCodeBlockCopyMode,
+    saveCodeBlockCopyButtonPosition,
+  };
 }
 
 function click(component: MenuComponent, x: number, y: number) {
@@ -100,6 +121,41 @@ function click(component: MenuComponent, x: number, y: number) {
     ctrl: false,
   });
 }
+
+test("applies copy settings in place and keeps the selected value after a failed save", async () => {
+  const menu = await openMenu({ codeBlockCopyMode: "click" });
+  menu.send(DOWN, DOWN, DOWN);
+  expect(text(menu.component.render(80))).toMatch(/Code Block Copy +Click block/u);
+  menu.send(ENTER);
+  await vi.waitFor(() => expect(text(menu.component.render(80))).toMatch(/Code Block Copy +Copy button/u));
+  expect(menu.closed).not.toHaveBeenCalled();
+  menu.saveCodeBlockCopyMode.mockRejectedValueOnce(new Error("write failed"));
+  menu.send(ENTER);
+  await vi.waitFor(() => expect(menu.notify).toHaveBeenCalledExactlyOnceWith("write failed", "error"));
+  expect(text(menu.component.render(80))).toMatch(/Code Block Copy +Copy button/u);
+  menu.send(ENTER);
+  await vi.waitFor(() => expect(text(menu.component.render(80))).toMatch(/Code Block Copy +Off/u));
+  menu.send("\x03");
+  await expect(menu.result).resolves.toBe(false);
+  expect(menu.saveCodeBlockCopyMode.mock.calls.map(([mode]) => mode)).toEqual(["button", "off", "off"]);
+});
+
+test("saves the button position independently without closing the menu", async () => {
+  const menu = await openMenu({ codeBlockCopyMode: "off" });
+  menu.send(DOWN, DOWN, DOWN, DOWN);
+  expect(text(menu.component.render(100))).toMatch(/Copy Button Position +Left/u);
+  menu.send(ENTER);
+  await vi.waitFor(() => expect(text(menu.component.render(100))).toMatch(/Copy Button Position +Right/u));
+  expect(menu.closed).not.toHaveBeenCalled();
+  expect(menu.saveCodeBlockCopyMode).not.toHaveBeenCalled();
+  expect(menu.saveCodeBlockCopyButtonPosition).toHaveBeenCalledExactlyOnceWith("right", expect.any(AbortSignal));
+  menu.saveCodeBlockCopyButtonPosition.mockRejectedValueOnce(new Error("write failed"));
+  menu.send(ENTER);
+  await vi.waitFor(() => expect(menu.notify).toHaveBeenCalledExactlyOnceWith("write failed", "error"));
+  expect(text(menu.component.render(100))).toMatch(/Copy Button Position +Right/u);
+  menu.send("\x1b");
+  await expect(menu.result).resolves.toBe(false);
+});
 
 test("renders a bounded callback-themed frame and separates saved and active settings", async () => {
   const menu = await openMenu({ active: { enabled: false, text: "Older" } });

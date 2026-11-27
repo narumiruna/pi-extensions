@@ -9,6 +9,7 @@ Style badges and preview local file citations in Pi's terminal transcript withou
 
 - Display decorative badges, linked badges, and local Markdown links in user and assistant messages.
 - Hover over a file link in fullscreen mode to preview local text files, including files outside the workspace, or workspace images.
+- Copy a whole code block with the **Copy code** button in fullscreen mode.
 - Turn on filename lookup for wikilinks in the current session.
 - Edit or turn off the system prompt hint for badges and file citations.
 
@@ -53,6 +54,11 @@ workspace also work for text previews without any setup. If Pi detects Kitty
 graphics support, hover over a workspace image link such as
 `[Cat Photo](./cat.png)` to see the image.
 
+In fullscreen mode on a supported Pi version, click **Copy code** below a
+fenced block in a user or assistant message. The button is on the left by
+default. It copies the source without fences or display wrapping and shows
+Pi's `Copied!` message in the upper-right corner.
+
 ## 💬 Commands
 
 Run `/inline` with no arguments in the terminal UI to open the settings menu.
@@ -65,6 +71,15 @@ If you used `/inline-markup`, switch to `/inline`; the old command was removed.
   the saved text.
 - **Edit Prompt Hint…** opens a multiline editor with the saved text, even if
   the hint is Off.
+- **Code Block Copy** saves and applies immediately, without a reload.
+  **Copy button** (default) adds a filled `Copy code` button below each block.
+  Narrow views use `Copy` when the full label does not fit. **Click block**
+  hides the button and copies about half a second after a single click, leaving
+  double-clicking and dragging to Pi. Moving the pointer alone after release
+  does not cancel copying. **Off** leaves Pi's native selection and `/copy`
+  command unchanged.
+- **Copy Button Position** saves and applies immediately. Choose **Left**
+  (default) or **Right**. This only affects **Copy button** mode.
 
 After a prompt hint change is saved, Pi asks whether to reload. Choose No to
 keep the saved change without applying it to the current session. Apply it later
@@ -111,12 +126,18 @@ and refreshes five seconds after each scan.
 
 ## ⚙️ Settings
 
-Prompt hint settings use `pi-inline.json` in Pi's agent directory (by default
+User settings use `pi-inline.json` in Pi's agent directory (by default
 `~/.pi/agent/`). Project settings are ignored. Use a regular file, not a
 symbolic link. If its content is invalid, repair it before saving through the
 menu. Settings writes are ordered within one Pi process, not between processes.
 Finish saving before editing the file by hand or from another Pi process.
 The former `externalPreviewRoots` field is ignored and can be removed.
+
+`codeBlockCopyMode` accepts `"button"` (the default), `"click"`, and `"off"`.
+`codeBlockCopyButtonPosition` accepts `"left"` (the default) and `"right"`.
+An invalid mode disables block copying. An invalid position uses the default.
+Invalid settings block saves until you repair the file. If you edit the file by
+hand, reload Pi to apply it.
 
 `promptHintEnabled` accepts a boolean and defaults to `true`. `promptHintText`
 accepts a non-blank string, including multiple lines. Line endings are saved as
@@ -144,6 +165,14 @@ turning it off does not remove text from earlier requests or stored history.
 ## 🚧 Limitations
 
 - Rounded badges require a font with Powerline glyphs.
+- Click-to-copy requires fullscreen SGR mouse reporting and a Pi version whose
+  rendering and selection behavior the extension has verified. On other versions
+  or in regular mode, Pi keeps its native behavior and the saved mode is retained.
+- Block copying applies to complete, nonempty fenced blocks at the top level of
+  user and assistant messages. It does not apply to streaming text, nested
+  blocks, tool output, or thinking. If decoration would change the original
+  rendering, the extension leaves the message unchanged. The button is omitted
+  when there is not enough room.
 - Hover previews require fullscreen mode, OSC 8 hyperlinks, and mouse movement
   reports without a button press. Pi does not request these reports in tmux,
   Zellij, or GNU Screen.

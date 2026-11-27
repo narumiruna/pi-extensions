@@ -8,7 +8,14 @@ import {
   sanitizeTerminalDocument,
 } from "@narumitw/pi-tui-kit";
 import { createPromptHintEditor } from "./prompt-hint-editor.js";
-import type { PromptHintChange, PromptHintSettings } from "./settings.js";
+import {
+  CODE_BLOCK_COPY_BUTTON_POSITIONS,
+  CODE_BLOCK_COPY_MODES,
+  type CodeBlockCopyButtonPosition,
+  type CodeBlockCopyMode,
+  type PromptHintChange,
+  type PromptHintSettings,
+} from "./settings.js";
 
 interface InlineSettingsOptions {
   signal: AbortSignal;
@@ -17,10 +24,17 @@ interface InlineSettingsOptions {
   saved: PromptHintSettings;
   active: PromptHintSettings;
   saveBlocked: boolean;
+  codeBlockCopyMode: CodeBlockCopyMode;
+  codeBlockCopyButtonPosition: CodeBlockCopyButtonPosition;
+  canCopyCodeBlocks: boolean;
+  saveCodeBlockCopyMode(mode: CodeBlockCopyMode, signal: AbortSignal): Promise<boolean>;
+  saveCodeBlockCopyButtonPosition(position: CodeBlockCopyButtonPosition, signal: AbortSignal): Promise<boolean>;
   save(change: PromptHintChange, signal: AbortSignal): Promise<boolean>;
 }
 
 const VALUES = ["On", "Off"];
+const COPY_LABELS: Record<CodeBlockCopyMode, string> = { click: "Click block", button: "Copy button", off: "Off" };
+const POSITION_LABELS: Record<CodeBlockCopyButtonPosition, string> = { left: "Left", right: "Right" };
 
 function onOff(enabled: boolean) {
   return enabled ? "On" : "Off";
@@ -41,6 +55,10 @@ export async function showInlineSettings(
         options.saved.enabled !== options.active.enabled || options.saved.text !== options.active.text;
       const promptValue = `${onOff(options.saved.enabled)}${reloadPending ? " (reload pending)" : ""}`;
       let pending: Promise<void> | undefined;
+      let saving: string | undefined;
+      let copyMode = options.codeBlockCopyMode;
+      let buttonPosition = options.codeBlockCopyButtonPosition;
+      const canSaveCopySettings = options.canCopyCodeBlocks && !options.saveBlocked;
       let editor: ReturnType<typeof createPromptHintEditor> | undefined;
       let focused = false;
       let renderedWidth = 0;
@@ -50,6 +68,7 @@ export async function showInlineSettings(
 
       function save(change: () => PromptHintChange, unchanged?: () => void) {
         if (signal.aborted || pending || options.saveBlocked) return;
+        saving = "Saving prompt hint…";
         pending = Promise.resolve().then(async () => {
           try {
             if (signal.aborted) return;
@@ -66,6 +85,26 @@ export async function showInlineSettings(
             ctx.ui.notify(detail || "Could not save the prompt hint.", "error");
           } finally {
             pending = undefined;
+            saving = undefined;
+            if (!signal.aborted) tui.requestRender();
+          }
+        });
+      }
+
+      function saveCopySetting(save: () => Promise<boolean>, apply: () => void) {
+        if (signal.aborted || pending || !canSaveCopySettings) return;
+        saving = "Saving code block copy…";
+        pending = Promise.resolve().then(async () => {
+          try {
+            if (signal.aborted || !(await save()) || signal.aborted) return;
+            apply();
+          } catch (error) {
+            if (signal.aborted) return;
+            const detail = error instanceof Error ? sanitizeTerminalDocument(error.message).replace(/\n/gu, " ") : "";
+            ctx.ui.notify(detail || "Could not save the code block copy setting.", "error");
+          } finally {
+            pending = undefined;
+            saving = undefined;
             if (!signal.aborted) tui.requestRender();
           }
         });
@@ -113,6 +152,24 @@ export async function showInlineSettings(
                 return editor;
               },
         },
+        {
+          id: "codeBlockCopyMode",
+          label: "Code Block Copy",
+          currentValue: COPY_LABELS[copyMode],
+          values: canSaveCopySettings ? CODE_BLOCK_COPY_MODES.map((mode) => COPY_LABELS[mode]) : undefined,
+          description: options.canCopyCodeBlocks
+            ? "Choose how to copy a whole code block in fullscreen."
+            : "Unavailable in this version of Pi. Native selection stays active.",
+        },
+        {
+          id: "codeBlockCopyButtonPosition",
+          label: "Copy Button Position",
+          currentValue: POSITION_LABELS[buttonPosition],
+          values: canSaveCopySettings
+            ? CODE_BLOCK_COPY_BUTTON_POSITIONS.map((position) => POSITION_LABELS[position])
+            : undefined,
+          description: "Align the button when Copy button mode is selected.",
+        },
       ];
       const list = new SettingsList(
         items,
@@ -131,6 +188,30 @@ export async function showInlineSettings(
             // Native SettingsList cycles first; keep the displayed value until a save succeeds.
             list.updateValue(id, promptValue);
             save(() => ({ key: id, value: value === "On" }));
+          }
+          if (id === "codeBlockCopyMode") {
+            list.updateValue(id, COPY_LABELS[copyMode]);
+            const mode = CODE_BLOCK_COPY_MODES.find((mode) => COPY_LABELS[mode] === value);
+            if (mode)
+              saveCopySetting(
+                () => options.saveCodeBlockCopyMode(mode, signal),
+                () => {
+                  copyMode = mode;
+                  list.updateValue(id, COPY_LABELS[mode]);
+                },
+              );
+          }
+          if (id === "codeBlockCopyButtonPosition") {
+            list.updateValue(id, POSITION_LABELS[buttonPosition]);
+            const position = CODE_BLOCK_COPY_BUTTON_POSITIONS.find((position) => POSITION_LABELS[position] === value);
+            if (position)
+              saveCopySetting(
+                () => options.saveCodeBlockCopyButtonPosition(position, signal),
+                () => {
+                  buttonPosition = position;
+                  list.updateValue(id, POSITION_LABELS[position]);
+                },
+              );
           }
         },
         () => complete(false),
@@ -155,11 +236,7 @@ export async function showInlineSettings(
             editor ? line.includes(CURSOR_MARKER) : stripVTControlCharacters(line).startsWith(cursor),
           );
           const terminalRows = Number.isFinite(tui.terminal.rows) ? Math.floor(tui.terminal.rows) : 24;
-          const status = pending
-            ? "Saving prompt hint…"
-            : options.saveBlocked
-              ? "Repair pi-inline.json before saving prompt settings."
-              : undefined;
+          const status = saving ?? (options.saveBlocked ? "Repair pi-inline.json before saving settings." : undefined);
           const frame = renderBoundedFrameLayout({
             width: renderedWidth,
             maxRows: Math.max(1, terminalRows - 3),
