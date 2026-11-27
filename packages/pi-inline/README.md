@@ -9,6 +9,7 @@ Style badges and preview local file citations in Pi's terminal transcript withou
 
 - Display decorative badges, linked badges, and local Markdown links in user and assistant messages.
 - Hover over a file link in fullscreen mode to preview local text files, including files outside the workspace, or workspace images.
+- Copy a whole code block with a click in fullscreen mode.
 - Turn on filename lookup for wikilinks in the current session.
 - Edit or turn off the system prompt hint for badges and file citations.
 
@@ -54,6 +55,11 @@ workspace also work for text previews without any setup. If Pi detects Kitty
 graphics support, hover over a workspace image link such as
 `[Cat Photo](./cat.png)` to see the image.
 
+In fullscreen mode on a supported Pi version, single-click a fenced code block
+in a user or assistant message to copy the source without the fences or display
+wrapping. Copy waits for Pi's double-click window (about half a second), so
+double-clicking and dragging can still select part of the code.
+
 ## 💬 Commands
 
 Run `/inline` with no arguments in the terminal UI. `/inline-markup` is a
@@ -66,6 +72,10 @@ compatibility alias.
   the saved text.
 - **Edit Prompt Hint…** opens a multiline editor with the saved text, even if
   the hint is Off.
+- **Code Block Copy** saves and applies immediately, without a reload. **Click
+  block** keeps the original appearance. **Copy button** copies only when you
+  click `[Copy]` below a block. **Off** leaves Pi's native selection and `/copy`
+  command unchanged.
 
 After a prompt hint change is saved, Pi asks whether to reload. Choose No to
 keep the saved change without applying it to the current session. Apply it later
@@ -112,12 +122,16 @@ and refreshes five seconds after each scan.
 
 ## ⚙️ Settings
 
-Prompt hint settings use `pi-inline.json` in Pi's agent directory (by default
+User settings use `pi-inline.json` in Pi's agent directory (by default
 `~/.pi/agent/`). Project settings are ignored. Use a regular file, not a
 symbolic link. If its content is invalid, repair it before saving through the
 menu. Settings writes are ordered within one Pi process, not between processes.
 Finish saving before editing the file by hand or from another Pi process.
 The former `externalPreviewRoots` field is ignored and can be removed.
+
+`codeBlockCopyMode` accepts `"click"` (the default), `"button"`, and `"off"`.
+An invalid value disables block copying and blocks saves until you repair the
+file. If you edit the file by hand, reload Pi to apply it.
 
 `promptHintEnabled` accepts a boolean and defaults to `true`. `promptHintText`
 accepts a non-blank string, including multiple lines. Line endings are saved as
@@ -145,6 +159,14 @@ turning it off does not remove text from earlier requests or stored history.
 ## 🚧 Limitations
 
 - Rounded badges require a font with Powerline glyphs.
+- Click-to-copy requires fullscreen SGR mouse reporting and a Pi version whose
+  rendering and selection behavior the extension has verified. On other versions
+  or in regular mode, Pi keeps its native behavior and the saved mode is retained.
+- Block copying applies to complete, nonempty fenced blocks at the top level of
+  user and assistant messages. It does not apply to streaming text, nested
+  blocks, tool output, or thinking. If decoration would change the original
+  rendering, the extension leaves the message unchanged. The button is omitted
+  when there is not enough room.
 - Hover previews require fullscreen mode, OSC 8 hyperlinks, and mouse movement
   reports without a button press. Pi does not request these reports in tmux,
   Zellij, or GNU Screen.

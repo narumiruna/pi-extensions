@@ -95,6 +95,33 @@ const osc8Params = (line: string) =>
     .map((part) => part.split(";", 1)[0])
     .filter((params) => params.startsWith("id="));
 
+test("decorates code blocks alongside native file links and applies a saved copy mode without reload", async ({
+  onTestFinished,
+}) => {
+  const session = await fragmentFixture(onTestFinished);
+  const source = "[[Note]] [README](./README.md)\n\n```js\nconst example = 3;\n```";
+  const click = session.draw(source);
+  expect(click.join("\n")).toContain("pi-inline-code-");
+  expect(click.map(stripTerminalSequences).join("\n")).not.toContain("[Copy]");
+  const saveMode = async (mode: "click" | "button" | "off") => {
+    session.settings.mockImplementationOnce(async (_ctx, options) => {
+      expect(await options.saveCodeBlockCopyMode(mode, options.signal)).toBe(true);
+      return false;
+    });
+    await session.runCommand();
+  };
+  try {
+    await saveMode("button");
+    const button = session.draw(source);
+    expect(button.map(stripTerminalSequences).join("\n")).toContain("[Copy]");
+    expect(button.join("\n")).toContain("./README.md");
+    await saveMode("off");
+    expect(session.draw(source).join("\n")).not.toContain("pi-inline-code-");
+  } finally {
+    await saveMode("click");
+  }
+});
+
 test("opens one README while hovering adjacent, wrapped, and restored links to different excerpts", async ({
   onTestFinished,
 }) => {

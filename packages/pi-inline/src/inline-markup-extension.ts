@@ -1,9 +1,22 @@
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import {
+  copyToClipboard,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+  type ExtensionContext,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
+import { createCodeBlockCopy, supportsCodeBlockCopy } from "./code-block-copy.js";
 import { createLinkMarker } from "./external-link-marker.js";
 import { createHoverPreview } from "./hover-preview.js";
 import { renderInlineMarkup } from "./inline-markup.js";
-import { loadPromptSettings, type PromptHintSettings, savePromptHint } from "./settings.js";
+import {
+  type CodeBlockCopyMode,
+  loadPromptSettings,
+  type PromptHintSettings,
+  saveCodeBlockCopyMode,
+  savePromptHint,
+} from "./settings.js";
 import { showInlineSettings } from "./settings-menu.js";
 import { createWikilinks } from "./wikilinks.js";
 
@@ -15,6 +28,8 @@ interface Session {
   tui: TUI;
   owner: ExtensionContext["sessionManager"];
   marker: ReturnType<typeof createLinkMarker>;
+  copy: ReturnType<typeof createCodeBlockCopy>;
+  codeBlockCopyMode: CodeBlockCopyMode;
   clearWidget(): void;
   dismissPreview(): void;
   wiki?: ReturnType<typeof createWikilinks>;
@@ -47,18 +62,26 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
     if (mode !== "tui") return;
     const settings = new AbortController();
     const marker = createLinkMarker();
+    const indent = pi.getSettings?.().markdown?.codeBlockIndent;
     let dispose: (() => void) | undefined;
     try {
       ui.setWidget(
         WIDGET_KEY,
         (tui, theme) => {
-          const preview = createHoverPreview(tui, theme, cwd, (href) => current.wiki?.findPreview(href), marker);
+          const copy = createCodeBlockCopy(tui, theme, indent, copyToClipboard, (success) => {
+            if (hasUI && session === current) {
+              ui.notify(success ? "Code copied" : "Could not copy the code block.", success ? "info" : "error");
+            }
+          });
+          const preview = createHoverPreview(tui, theme, cwd, (href) => current.wiki?.findPreview(href), marker, copy);
           const current: Session = {
             cwd,
             theme,
             tui,
             owner: sessionManager,
             marker,
+            copy,
+            codeBlockCopyMode: "off",
             clearWidget: () => ui.setWidget(WIDGET_KEY, undefined),
             dismissPreview: preview.dismiss,
           };
@@ -69,6 +92,7 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
             settings.abort();
             current.menu?.abort();
             marker.clear();
+            copy.dispose();
             preview.dispose();
             current.wiki?.dispose();
             current.wiki = undefined;
@@ -82,6 +106,8 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
       const snapshot = await loadPromptSettings(settings.signal);
       if (settings.signal.aborted || session?.marker !== marker) return;
       session.prompt = snapshot.prompt;
+      session.codeBlockCopyMode = snapshot.codeBlockCopyMode;
+      session.copy.setMode(snapshot.codeBlockCopyMode);
       if (snapshot.saveBlocked && hasUI)
         ui.notify("pi-inline: Invalid or unreadable settings were ignored.", "warning");
     } catch (error) {
@@ -113,6 +139,7 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
     try {
       const saved = await loadPromptSettings(menu.signal);
       if (!live()) return;
+      let savedCopyMode = saved.codeBlockCopyMode;
       const changed = await showInlineSettings(ctx, {
         signal: menu.signal,
         wikilinks: Boolean(current.wiki),
@@ -122,6 +149,24 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
         saved: saved.prompt,
         active,
         saveBlocked: Boolean(saved.saveBlocked),
+        codeBlockCopyMode: current.codeBlockCopyMode,
+        canCopyCodeBlocks: supportsCodeBlockCopy(),
+        async saveCodeBlockCopyMode(mode, signal) {
+          if (!live() || signal.aborted) return false;
+          const pending = saveCodeBlockCopyMode(savedCopyMode, mode, signal);
+          writes.add(pending);
+          try {
+            const committed = await pending;
+            if (!committed && signal.aborted) return false;
+            savedCopyMode = mode;
+            if (session !== current) return false;
+            current.codeBlockCopyMode = mode;
+            current.copy.setMode(mode);
+            return true;
+          } finally {
+            writes.delete(pending);
+          }
+        },
         async save(change, signal) {
           if (!live() || signal.aborted) return false;
           const pending = savePromptHint(saved.prompt, change, signal);
@@ -164,9 +209,11 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
   });
 
   // Pi 1.5.0 does not accept messageTypes registration options.
-  pi.registerMarkdownTransformer((markdown, { messageType }) => {
+  pi.registerMarkdownTransformer((markdown, context) => {
+    const { messageType } = context;
     if (!session || (messageType !== "user" && messageType !== "assistant")) return markdown;
-    const { cwd, theme, wiki, marker } = session;
-    return renderInlineMarkup(markdown, cwd, theme, messageType === "user", wiki, marker);
+    const { cwd, theme, wiki, marker, copy } = session;
+    const decorated = renderInlineMarkup(markdown, cwd, theme, messageType === "user", wiki, marker);
+    return copy.transform(decorated, context);
   });
 }
