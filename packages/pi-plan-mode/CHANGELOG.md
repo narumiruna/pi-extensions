@@ -1,5 +1,11 @@
 # @narumitw/pi-plan-mode
 
+## 0.62.1
+
+### Patch Changes
+
+- ef62d91: Start the fullscreen Plan pane at half the available width and remember its last dragged width across sessions and restarts.
+
 ## 0.62.0
 
 ### Minor Changes

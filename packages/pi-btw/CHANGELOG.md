@@ -1,5 +1,11 @@
 # @narumitw/pi-btw
 
+## 0.64.0
+
+### Minor Changes
+
+- 97a0a52: Add an optional floating side-thread layout. Move or resize the window with the keyboard or drag it with the mouse in Pi fullscreen mode. Fullscreen remains the default layout.
+
 ## 0.63.9
 
 ### Patch Changes

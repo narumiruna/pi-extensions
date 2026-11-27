@@ -1,5 +1,12 @@
 # @narumitw/pi-inline
 
+## 0.7.0
+
+### Minor Changes
+
+- 8826299: Copy whole fenced code blocks in fullscreen mode with a button on the left by default. Use `/inline` to align it on the right, switch to single-click copying, or keep Pi's native behavior.
+- 95d576b: **Breaking change:** Remove the `/inline-markup` compatibility alias. Use `/inline` to open the same settings menu.
+
 ## 0.6.2
 
 ### Patch Changes
