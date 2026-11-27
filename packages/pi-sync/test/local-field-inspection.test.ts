@@ -73,8 +73,10 @@ for (const [before, after, changed] of [
       );
       await status(ctx as ExtensionCommandContext, options, () => backend);
       const message = notifications.at(-1)?.message ?? "";
-      assert.match(message, new RegExp(`local changed since last sync: ${changed ? "yes" : "no"}`));
-      assert.match(message, new RegExp(`remote changed since last sync: ${changed ? "yes" : "no"}`));
+      const comparison = changed ? "changed" : "unchanged";
+      assert.ok(
+        message.includes(`Changes since last sync\n  Local: ${comparison} (1 file)\n  Remote: ${comparison}\n`),
+      );
       assert.equal(reads.mock.calls.length, 0);
       assert.equal(publication.mock.calls.length, 0);
       assert.deepEqual(await fs.readFile(statePathForConfig(config)), stateBefore);

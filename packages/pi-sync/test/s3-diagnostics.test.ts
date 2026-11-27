@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import { test, vi } from "vitest";
+import { createMockContext } from "../../../test/support.js";
 import type { ResolvedS3Backend } from "../src/backends/backend-types.js";
 import { S3SyncBackend } from "../src/backends/s3/s3-backend.js";
 import { S3Client } from "../src/backends/s3/s3-client.js";
+import { localConfigPath } from "../src/settings/config-file.js";
+import { doctor } from "../src/sync/sync-queries.js";
+import { v3S3Settings, withTempHome } from "./helpers.js";
 
 const config: ResolvedS3Backend = {
   type: "s3",
@@ -128,6 +135,45 @@ test.each([false, true])(
     assert.doesNotMatch(output, /private-token/u);
   },
 );
+
+test("R2 report puts the token warning first and keeps the read-only check clear in TUI", async () => {
+  await withTempHome(async (root) => {
+    await mkdir(root, { recursive: true });
+    await writeFile(path.join(root, "settings.json"), "{}\n");
+    const settings = v3S3Settings();
+    Object.assign(settings.storageConnections.r2.credentials, { sessionToken: "private-token" });
+    await writeFile(localConfigPath(), JSON.stringify(settings));
+    using fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("not validated snapshot data"));
+    const { ctx, notifications } = createMockContext({ hasUI: true, mode: "tui" });
+    await doctor(ctx, { args: [], yes: false, force: false, stale: false, silent: false, reload: false, auto: false });
+    const [report] = notifications;
+    assert.equal(report?.level, "warning");
+    assert.match(
+      report.message,
+      /^Diagnostics · home\n\nNeeds attention\n {2}session token: configured for Cloudflare R2/u,
+    );
+    assert.match(
+      report.message,
+      /\n {2}s3 remote read: HTTP success\. Snapshot contents and write access are not tested\./u,
+    );
+    assert.match(
+      report.message,
+      /\n {2}Publication safety: Read-only until atomic conditional writes are verified\n\nSync scope/u,
+    );
+    assert.doesNotMatch(report.message, /access-key|secret-key|private-token|s3 config:/u);
+    assert.equal(fetch.mock.calls.length, 1);
+    assert.equal(fetch.mock.calls[0]?.[1]?.method, "GET");
+    for (const width of [60, 100]) {
+      const lines = new Text(`Warning: ${report.message}`, 1, 0).render(width);
+      assert.ok(lines.every((line) => visibleWidth(line) <= width));
+      for (const heading of ["Needs attention", "Local checks", "Storage · r2", "Sync scope"])
+        assert.ok(
+          lines.some((line) => line.trim() === heading),
+          heading,
+        );
+    }
+  });
+});
 
 test("successful S3 diagnostic cancels the unread response body", async () => {
   let cancelled = false;

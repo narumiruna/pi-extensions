@@ -35,6 +35,21 @@ function contentLines(config: AnySyncConfig) {
   ];
 }
 
+function fileCount(count: number) {
+  return `${count} ${count === 1 ? "file" : "files"}`;
+}
+
+function reportSection(title: string, lines: readonly string[]) {
+  return lines.length > 0 ? ["", title, ...lines.map((line) => `  ${line}`)] : [];
+}
+
+function storageSection(connection: string, destination: string, details: readonly string[]) {
+  return reportSection(`Storage · ${safeTerminalText(connection)}`, [
+    `Location: ${safeTerminalText(destination)}`,
+    ...details,
+  ]);
+}
+
 export async function status(
   ctx: ExtensionCommandContext,
   options: CommandOptions,
@@ -43,37 +58,53 @@ export async function status(
   const config = await loadConfig(options.setup);
   throwIfAborted(options.signal);
   setSyncStatus(ctx, `checking ${config.setupName}`, { activity: "checking" });
-  const { head, selectionState, localChanged, remoteChanged, localFiles, destination, capability } = await inspectSync(
-    config,
-    await resolvedSnapshotOptionsForContext(ctx, config, options.signal),
-    options.signal,
-    factory,
-  );
+  const { head, selectionState, localChanged, remoteChanged, localFiles, firstSync, destination, capability } =
+    await inspectSync(
+      config,
+      await resolvedSnapshotOptionsForContext(ctx, config, options.signal),
+      options.signal,
+      factory,
+    );
   throwIfAborted(options.signal);
 
   const continuous = config.continuous
     ? await (await import("./continuous-record.js")).continuousStatusLines(config)
     : [];
   throwIfAborted(options.signal);
-  const remoteText = head ? `remote: ${head.snapshotId} from ${head.machine} at ${head.createdAt}` : "remote: empty";
   const warnings = syncSessionsWarnings(config);
+  const files = fileCount(localFiles);
+  const comparison = firstSync
+    ? [`Local: ${files}`, `Remote: ${head ? "snapshot available" : "empty"}`]
+    : [
+        `Local: ${localChanged ? "changed" : "unchanged"} (${files})`,
+        `Remote: ${remoteChanged ? "changed" : "unchanged"}`,
+      ];
   setSyncStatus(ctx, undefined);
   ctx.ui.notify(
     [
-      `sync setup: ${config.setupName}`,
-      `storage connection: ${config.connectionName}`,
-      `storage location: ${safeTerminalText(destination)}`,
-      `publication safety: ${publicationCapabilityDescription(capability)}`,
-      ...contentLines(config),
-      ...continuous,
-      remoteText,
-      formatRemoteSelectionStatus(selectionState),
-      `local files: ${localFiles}`,
-      `local changed since last sync: ${localChanged ? "yes" : "no"}`,
-      `remote changed since last sync: ${remoteChanged ? "yes" : "no"}`,
-      ...warnings,
+      `Remote status · ${safeTerminalText(config.setupName)}`,
+      ...reportSection(firstSync ? "No previous sync recorded" : "Changes since last sync", [
+        ...comparison,
+        ...(head ? formatRemoteSelectionStatus(selectionState).split("\n") : []),
+      ]),
+      ...reportSection("Needs attention", warnings),
+      ...storageSection(config.connectionName, destination, [
+        `Publication safety: ${publicationCapabilityDescription(capability)}`,
+        ...(head
+          ? [
+              `Latest snapshot: ${safeTerminalText(head.snapshotId)}`,
+              `Device: ${safeTerminalText(head.machine)}`,
+              `Created: ${safeTerminalText(head.createdAt)}`,
+            ]
+          : firstSync
+            ? []
+            : ["Latest snapshot: none"]),
+      ]),
+      ...reportSection("Background activity", continuous.map(safeTerminalText)),
+      ...reportSection("Sync scope", contentLines(config)),
     ].join("\n"),
     localChanged || remoteChanged || selectionState?.kind === "different" || warnings.length > 0 ? "warning" : "info",
+    "report",
   );
 }
 
@@ -119,77 +150,83 @@ export async function doctor(
   options: CommandOptions,
   factory: SyncBackendFactory = createSyncBackend,
 ) {
-  const messages: string[] = [];
-  let level: "info" | "warning" = "info";
-  let localConfig: { profile: string; snapshotOptions: SnapshotOptions } | undefined;
+  const attention: string[] = [];
+  const localChecks: string[] = [];
+  let config: AnySyncConfig | undefined;
+  let snapshotOptions: SnapshotOptions | undefined;
   let backend: SyncBackend | undefined;
-  let backendSummary: string[] = [];
 
   try {
-    const config = await loadConfig(options.setup);
+    config = await loadConfig(options.setup);
     throwIfAborted(options.signal);
-    localConfig = {
-      profile: config.snapshotIdentity,
-      snapshotOptions: await resolvedSnapshotOptionsForContext(ctx, config, options.signal),
-    };
+    snapshotOptions = await resolvedSnapshotOptionsForContext(ctx, config, options.signal);
+    throwIfAborted(options.signal);
     backend = await factory(config);
-    messages.push(`config: ok (sync setup ${config.setupName})`, ...contentLines(config));
-    backendSummary = [
-      `storage location: ${safeTerminalText(backend.destination)}`,
-      `publication safety: ${publicationCapabilityDescription(backend.capability)}`,
-    ];
-    const warnings = syncSessionsWarnings(config);
-    if (warnings.length > 0) {
-      level = "warning";
-      messages.push(...warnings);
-    }
+    throwIfAborted(options.signal);
+    localChecks.push("Configuration: OK");
+    attention.push(...syncSessionsWarnings(config));
   } catch (error) {
     throwIfAborted(options.signal);
-    level = "warning";
-    messages.push(`config: ${errorMessage(error)}`);
+    attention.push(`Configuration: ${safeTerminalText(errorMessage(error))}`);
   }
 
-  if (localConfig) {
-    const local = await createSnapshot(localConfig.profile, localConfig.snapshotOptions);
+  if (config && snapshotOptions) {
+    const local = await createSnapshot(config.snapshotIdentity, snapshotOptions);
     throwIfAborted(options.signal);
     const secrets = scanSnapshot(local);
     if (secrets.length > 0) {
-      level = "warning";
-      messages.push("secret scan: possible secrets found:");
-      messages.push(...secrets.map((secret) => `- ${safeTerminalText(secret)}`));
+      attention.push(
+        "Secret scan: possible secrets found",
+        ...secrets.map((secret) => `  - ${safeTerminalText(secret)}`),
+      );
     } else {
-      messages.push(`secret scan: ok (${local.files.length} files checked)`);
+      localChecks.push(`Secret scan: OK (${fileCount(local.files.length)} checked)`);
     }
-  } else messages.push("secret scan: skipped without a valid content policy");
+  } else localChecks.push("Secret scan: skipped without a valid content policy");
 
   const lock = await inspectLock();
   throwIfAborted(options.signal);
   if (lock.status === "valid" && isStaleLock(lock.lock)) {
-    level = "warning";
-    messages.push(`lock: stale (pid ${lock.lock.pid}); run /sync unlock --stale after verifying no sync is running`);
+    attention.push(
+      `Operation lock: stale (PID ${lock.lock.pid}); run /sync unlock --stale after verifying no sync is running`,
+    );
   } else if (lock.status === "valid") {
-    messages.push(`lock: held by pid ${lock.lock.pid} since ${lock.lock.startedAt}`);
+    localChecks.push(`Operation lock: held by PID ${lock.lock.pid} since ${safeTerminalText(lock.lock.startedAt)}`);
   } else if (lock.status === "unreadable") {
-    level = "warning";
-    messages.push("lock: unreadable; use /sync unlock --stale only after verifying no sync is running");
+    attention.push("Operation lock: unreadable; use /sync unlock --stale only after verifying no sync is running");
   } else if (await isLockGuardHeld()) {
-    throwIfAborted(options.signal);
-    level = "warning";
-    messages.push("lock: guard active while metadata is missing or still being initialized");
+    attention.push("Operation lock: guard active while metadata is missing or still being initialized");
   } else {
-    messages.push("lock: free");
+    localChecks.push("Operation lock: free");
   }
+  throwIfAborted(options.signal);
 
+  const storageChecks: string[] = [];
   if (backend) {
-    messages.push(...backendSummary);
     const diagnostics = await backend.diagnose(options.signal);
     throwIfAborted(options.signal);
     for (const diagnostic of diagnostics) {
-      messages.push(diagnostic.message);
-      if (diagnostic.level !== "info") level = "warning";
+      if (diagnostic.key === "s3-config" && diagnostic.level === "info") continue;
+      const finding = safeTerminalText(diagnostic.message.replaceAll("\n", " "));
+      (diagnostic.level === "info" ? storageChecks : attention).push(finding);
     }
   }
-  ctx.ui.notify(messages.join("\n"), level);
+  ctx.ui.notify(
+    [
+      config ? `Diagnostics · ${safeTerminalText(config.setupName)}` : "Diagnostics",
+      ...reportSection("Needs attention", attention),
+      ...reportSection("Local checks", localChecks),
+      ...(config && backend
+        ? storageSection(config.connectionName, backend.destination, [
+            ...storageChecks,
+            `Publication safety: ${publicationCapabilityDescription(backend.capability)}`,
+          ])
+        : []),
+      ...(config ? reportSection("Sync scope", contentLines(config)) : []),
+    ].join("\n"),
+    attention.length > 0 ? "warning" : "info",
+    "report",
+  );
 }
 
 export async function history(

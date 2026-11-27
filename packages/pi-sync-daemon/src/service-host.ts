@@ -252,7 +252,8 @@ export function createServiceContext(execution: Execution): EngineContext {
       await ask("reload", {});
     },
     ui: {
-      notify: (message, level = "info") => execution.emit("notify", { message, level }),
+      notify: (message, level = "info", layout) =>
+        execution.emit("notify", { message, level, ...(layout ? { layout } : {}) }),
       setStatus: (_key, value) => execution.emit("status", { value }),
       confirm: async (title, message, options) => (await ask("confirm", { title, message }, options?.signal)) === true,
       select: async (title, items, options) => {

@@ -79,7 +79,7 @@ Escape closes the screen without undoing successful saves.
 Complex values retain their input/review flows.
 This navigation change does not alter schema, defaults, automatic-sync behavior, or explicit opt-ins.
 
-The main menu shows cached status separately from transfer, inspection, and management actions. **Check remote status** and **View differences** run their checks only when selected.
+The main menu shows cached status separately from transfer, inspection, and management actions. **Check remote status** and **View differences** run their checks only when selected. **Check remote status** (`/sync status`) shows local and remote changes first, or indicates that no previous sync was recorded. Storage, snapshot details, and sync scope follow.
 **Last applied** shows a compact snapshot ID and marks application time as unavailable instead of substituting snapshot creation time. **History** shows the full IDs.
 See the [TUI behavior contract](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/tui-contract.md) for scopes and transfer branches.
 
@@ -288,7 +288,7 @@ Enable it only after reviewing the destination and selected content because file
 
 ### Diagnostics
 
-**/sync → Diagnostics** and `/sync doctor` use the same existing route.
+**/sync → Diagnostics** and `/sync doctor` use the same route. The report puts findings that need attention first, followed by local checks, storage checks, and sync scope.
 S3/R2 reads the selected setup's latest pointer with a ten-second deadline and bounded error details; it never writes, deletes, lists buckets, or changes settings.
 HTTP success does not validate snapshot contents or write access.
 `NoSuchKey` indicates no snapshot at the path; `NoSuchBucket` indicates a missing bucket; other 404 responses cannot distinguish the two.

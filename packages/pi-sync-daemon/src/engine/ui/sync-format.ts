@@ -216,7 +216,7 @@ export function publicationCapabilityDescription(capability: PublicationCapabili
     case "atomic-conditional":
       return "atomic-conditional (verified atomic precondition)";
     case "conditional-required":
-      return "conditional-required (read-only until atomic preconditions are verified)";
+      return "Read-only until atomic conditional writes are verified";
     case "read-check-write-verify":
       return "read-check-write-verify (visible races rejected; simultaneous unseen races remain possible)";
   }

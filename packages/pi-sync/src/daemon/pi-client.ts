@@ -539,12 +539,18 @@ export class PiDaemonClient {
             const payload = event.payload as {
               message?: string;
               level?: "info" | "warning" | "error";
+              layout?: "report";
               report?: string;
               value?: string;
               presentation?: SyncStatusPresentation;
             };
-            if (event.kind === "notify" && typeof payload?.message === "string")
-              this.uiContext.ui.notify(safeTerminalText(payload.message), payload.level ?? "info");
+            if (event.kind === "notify" && typeof payload?.message === "string") {
+              const message =
+                payload.layout === "report"
+                  ? payload.message.split("\n").map(safeTerminalText).join("\n")
+                  : safeTerminalText(payload.message);
+              this.uiContext.ui.notify(message, payload.level ?? "info");
+            }
             if (event.kind === "timings" && typeof payload?.report === "string") {
               this.publish?.(this.ctx, payload.report.split("\n").map(safeTerminalText).join("\n"));
             }

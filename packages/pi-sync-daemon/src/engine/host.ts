@@ -30,7 +30,7 @@ export interface EngineContext {
   /** Additional sessions are protected by the service, including disconnected live clients. */
   protectedSessionFiles?: readonly string[];
   ui: {
-    notify(message: string, level?: "info" | "warning" | "error"): void;
+    notify(message: string, level?: "info" | "warning" | "error", layout?: "report"): void;
     setStatus(key: string, value: string | undefined): void;
     confirm(title: string, message: string, options?: { signal?: AbortSignal; timeout?: number }): Promise<boolean>;
     select(
