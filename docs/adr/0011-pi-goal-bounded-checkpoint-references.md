@@ -18,18 +18,6 @@ Use **bounded direct references with a size check**. Keep the current accounting
 - Accept a source only if the current reader can resolve the same path. Do not cross a clear, another Goal, an objective edit, or an invalid checkpoint. Use a full snapshot if the APIs are unavailable, a link is missing or cyclic before the source, or the limit is reached without a valid source. The scan relies on Pi's session entry IDs being unique; it is not a validator for the entire session file.
 - Keep selection and append synchronous in the same session. Keep `{ goal: null }` for a clear. Do not rewrite existing session files or change the reader format defined in the [continuation lifecycle guide](../../packages/pi-goal/docs/continuation-lifecycle.md#compaction-persistence).
 
-The proposed writer uses the full format unless it can verify both the source and the size benefit.
-
-```mermaid
-flowchart TD
-    Save["Save a Goal checkpoint"] --> Scan["Follow up to 64 entries from getLeafEntry() using getEntry()"]
-    Scan --> Source{"Valid full source with the same Goal ID and objective?"}
-    Source -->|No| Full["Append full snapshot"]
-    Source -->|Yes| Size{"Is compact JSON smaller in UTF-8 bytes?"}
-    Size -->|No| Full
-    Size -->|Yes| Compact["Append current state with objectiveEntryId instead of goal.text"]
-```
-
 ## Considered options
 
 | Method | Storage and write cost | Reason for selection or rejection |
@@ -40,6 +28,84 @@ flowchart TD
 | **4. Periodic full snapshots counted only by Goal checkpoints** | Limit the number of compact Goal checkpoints between full snapshots. | Reject as a write-time bound. Any number of messages or other session entries can fall between two Goal checkpoints, so the parent walk is still unbounded. |
 | **5. Skip identical checkpoints** | Save space only when the persisted state is identical. | Reject as the main solution. A change in usage or status still writes the objective again. Skipping also removes a distinct saved point from the branch history. |
 | **6. Reuse a cached source ID without checking ancestry** | Avoid a parent walk on a cache hit. | Reject an unchecked cache: a fork or clear can leave the cached ID unusable. A branch-aware cache could work, but it would add state and invalidation rules that the bounded scan does not need. |
+
+### Write flows
+
+Each flow starts when Goal saves a checkpoint. The flows do not show explicit clears.
+
+#### 1. Full snapshots
+
+Write the complete state without looking up an earlier checkpoint.
+
+```mermaid
+flowchart TD
+    Save["Save a Goal checkpoint"] --> Full["Append current state with goal.text"]
+```
+
+#### 2. Unbounded direct references
+
+PR #2066 searches the active branch without a fixed limit. It does not compare encoded sizes.
+
+```mermaid
+flowchart TD
+    Save["Save a Goal checkpoint"] --> Scan["Get the active branch and check the latest Goal checkpoint"]
+    Scan --> Source{"Does it lead to a valid full source for the same Goal ID and objective?"}
+    Source -->|No| Full["Append current state with goal.text"]
+    Source -->|Yes| Compact["Append current state with objectiveEntryId instead of goal.text"]
+```
+
+#### 3. Bounded direct references with a size check
+
+The selected design writes a reference only if it finds a valid source within the limit and the compact record is smaller.
+
+```mermaid
+flowchart TD
+    Save["Save a Goal checkpoint"] --> Scan["Follow up to 64 entries from getLeafEntry() using getEntry()"]
+    Scan --> Source{"Valid full source with the same Goal ID and objective?"}
+    Source -->|No| Full["Append current state with goal.text"]
+    Source -->|Yes| Size{"Is compact JSON smaller in UTF-8 bytes?"}
+    Size -->|No| Full
+    Size -->|Yes| Compact["Append current state with objectiveEntryId instead of goal.text"]
+```
+
+#### 4. Periodic full snapshots counted only by Goal checkpoints
+
+Refresh the full snapshot at a fixed Goal checkpoint count. Between refreshes, the count does not bound the parent walk.
+
+```mermaid
+flowchart TD
+    Save["Save a Goal checkpoint"] --> Count{"Is a full snapshot due by Goal count?"}
+    Count -->|Yes| Full["Append current state with goal.text and reset the count"]
+    Count -->|No| Scan["Walk the active branch to find the source"]
+    Scan --> Source{"Can the source be reused?"}
+    Source -->|No| Full
+    Source -->|Yes| Compact["Append current state with objectiveEntryId and advance the count"]
+```
+
+#### 5. Skip identical checkpoints
+
+Skip the write only if the entire persisted state matches the latest checkpoint on the active branch.
+
+```mermaid
+flowchart TD
+    Save["Save a Goal checkpoint"] --> Same{"Does the latest Goal checkpoint match all current fields?"}
+    Same -->|Yes| Skip["Append nothing"]
+    Same -->|No| Full["Append current state with goal.text"]
+```
+
+#### 6. Reuse a cached source ID without checking ancestry
+
+A cache hit skips the parent walk, but the source may no longer be usable after a fork or clear.
+
+```mermaid
+flowchart TD
+    Save["Save a Goal checkpoint"] --> Cached{"Is a source ID cached for this Goal and objective?"}
+    Cached -->|Yes| Compact["Append current state with the cached objectiveEntryId"]
+    Cached -->|No| Full["Append current state with goal.text and cache its entry ID"]
+    Compact --> Restore{"Can the reader resolve the reference on this branch?"}
+    Restore -->|Yes| Found["Restore the latest Goal"]
+    Restore -->|No| Missing["Restore no Goal"]
+```
 
 ## Consequences
 
