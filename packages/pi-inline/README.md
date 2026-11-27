@@ -42,8 +42,7 @@ for a project install.
 
 If you load the old checkout path, replace it with `./packages/pi-inline`.
 Remove any explicit entry for the former `.pi/extensions/pi-inline-markup/`
-extension. Do not load both copies. Use `/inline` to open the settings menu.
-`/inline-markup` still opens the same menu.
+extension. Do not load both copies.
 
 ## 🚀 Quick start
 
@@ -56,8 +55,8 @@ graphics support, hover over a workspace image link such as
 
 ## 💬 Commands
 
-Run `/inline` with no arguments in the terminal UI. `/inline-markup` is a
-compatibility alias.
+Run `/inline` with no arguments in the terminal UI to open the settings menu.
+If you used `/inline-markup`, switch to `/inline`; the old command was removed.
 
 - **Wikilinks** changes filename lookup immediately for the current session.
   It starts Off in each new session and after `/reload`. Turning it Off stops

@@ -171,20 +171,17 @@ test.for(["show", "cancel"] as const)(
   },
 );
 
-test.for(["inline", "inline-markup"])(
-  "opens /%s only in the terminal UI without arguments",
-  async (route, { onTestFinished }) => {
-    const session = await startSession();
-    onTestFinished(session.stop);
-    await expect(session.runCommand("on", "tui", route)).rejects.toThrow("no arguments");
-    for (const mode of ["rpc", "print", "json"] as const) {
-      await expect(session.runCommand("", mode, route)).rejects.toThrow("terminal UI");
-    }
-    expect(session.settings).not.toHaveBeenCalled();
-    await session.runCommand("", "tui", route);
-    expect(session.settings).toHaveBeenCalledOnce();
-  },
-);
+test("opens /inline only in the terminal UI without arguments", async ({ onTestFinished }) => {
+  const session = await startSession();
+  onTestFinished(session.stop);
+  await expect(session.runCommand("on", "tui")).rejects.toThrow("no arguments");
+  for (const mode of ["rpc", "print", "json"] as const) {
+    await expect(session.runCommand("", mode)).rejects.toThrow("terminal UI");
+  }
+  expect(session.settings).not.toHaveBeenCalled();
+  await session.runCommand();
+  expect(session.settings).toHaveBeenCalledOnce();
+});
 
 test("dismisses a pending menu on replacement and ignores its late answer", async ({ onTestFinished }) => {
   const session = await startSession();

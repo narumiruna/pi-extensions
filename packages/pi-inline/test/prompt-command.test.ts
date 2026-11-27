@@ -77,9 +77,9 @@ async function fixture(onTestFinished: (cleanup: () => void | Promise<void>) => 
     stop,
     writeSettings: (value: unknown) => writeFile(settingsPath, JSON.stringify(value)),
     readSettings: async () => JSON.parse(await readFile(settingsPath, "utf8")) as unknown,
-    async run(route = "inline") {
-      const command = commands.get(route);
-      if (!command) throw new Error(`Unregistered command: ${route}`);
+    async run() {
+      const command = commands.get("inline");
+      if (!command) throw new Error("Unregistered command: inline");
       await command.handler("", ctx);
     },
     async currentHint() {
@@ -122,7 +122,7 @@ test("saves a changed toggle before asking and keeps the active hint when reload
     savedAtConfirm = await host.readSettings();
     return false;
   });
-  await host.run("inline-markup");
+  await host.run();
   expect(host.confirm).toHaveBeenCalledOnce();
   expect(savedAtConfirm).toEqual({ promptHintEnabled: false });
   expect(host.reload).not.toHaveBeenCalled();
