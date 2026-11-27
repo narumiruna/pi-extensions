@@ -92,9 +92,14 @@ still goes through, Pi tells you to run `/reload`.
   WebP paths and a file icon (📄) for other paths. Use a plain-text or inline-code
   label with an absolute path or a path relative to Pi's working directory.
   Paths can point outside that directory, including with `../`. Encode spaces
-  as `%20`. The icon does not indicate that a file exists or has a preview.
-- Use `#L12` for one source line or `#L12-L20` for an inclusive range. Hover also
-  accepts `#L12-20`. These previews show literal source rather than rendered Markdown.
+  as `%20` and `#` in a filename as `%23`. The icon does not indicate that a
+  file exists or has a preview.
+- **Click:** For a styled local path with a non-empty `#` anchor and no query,
+  the extension sends a `file://` URL for the file, without the anchor. It does
+  not ask the terminal or editor to jump to a line or heading.
+- **Hover:** Use `#L12` for one source line or `#L12-L20` (also `#L12-20`)
+  for an inclusive range. These previews show literal source. A Markdown heading
+  anchor previews the file without selecting the heading.
 
 When wikilinks are on, `[[README]]` looks up files under Pi's working directory,
 `[[README.md|Guide]]` sets a custom label, and `[[./README.md]]` selects an exact
@@ -143,6 +148,9 @@ turning it off does not remove text from earlier requests or stored history.
 - Hover previews require fullscreen mode, OSC 8 hyperlinks, and mouse movement
   reports without a button press. Pi does not request these reports in tmux,
   Zellij, or GNU Screen.
+- Opening a `file://` link depends on your terminal. If Pi and the terminal
+  viewer run on different hosts, the URL can resolve on the wrong host. Do not
+  rely on these links to open remote files.
 - Text previews show up to 16 KiB of a regular UTF-8 file. For a line-anchored
   preview, the first requested line must start within the first 256 KiB.
 - Image previews require Kitty graphics and display a static PNG, JPEG, GIF, or

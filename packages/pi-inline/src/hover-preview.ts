@@ -8,7 +8,7 @@ import {
   type TUI,
   TuiAltScreen,
 } from "@earendil-works/pi-tui";
-import type { createExternalLinkMarker } from "./external-link-marker.js";
+import type { createLinkMarker } from "./external-link-marker.js";
 import { classifyLinkPath, parseLineRange, readExcerpt, renderFilePreview } from "./filelinks.js";
 import { prepareImagePreview, previewImageMime } from "./image-preview.js";
 import {
@@ -28,12 +28,22 @@ interface Point {
   col: number;
 }
 
-interface Hover extends Point {
+type LinkMarker = ReturnType<typeof createLinkMarker>;
+
+interface PreviewLink {
   href: string;
   path?: string;
   external: boolean;
+  file?: NonNullable<ReturnType<LinkMarker["findFile"]>>;
   preview?: WikiPreview;
+}
+
+interface Hover extends Point, PreviewLink {
   controller: AbortController;
+}
+
+function sameLink(a: PreviewLink, b: PreviewLink | undefined): boolean {
+  return b !== undefined && a.href === b.href && a.file === b.file && a.preview === b.preview;
 }
 
 export function createHoverPreview(
@@ -41,7 +51,7 @@ export function createHoverPreview(
   theme: Theme,
   cwd: string,
   findWikiPreview: (href: string) => WikiPreview | undefined,
-  marker: ReturnType<typeof createExternalLinkMarker>,
+  marker: LinkMarker,
 ): Component & { dismiss(): void; dispose(): void } {
   let hover: Hover | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -62,13 +72,23 @@ export function createHoverPreview(
     return tui instanceof TuiAltScreen ? (tui.getScreenLines()[row] ?? "") : "";
   }
 
-  function stillOnLink({ row, col, href, preview, external }: Hover): boolean {
+  function linkAt({ row, col }: Point): PreviewLink | undefined {
     const line = screenLine(row);
-    return (
-      getOsc8LinkAtColumn(hoverLinkLine(line), col) === href &&
-      findWikiPreview(href) === preview &&
-      (!external || marker.matches(line, col, href))
-    );
+    const href = getOsc8LinkAtColumn(hoverLinkLine(line), col);
+    if (!href) return undefined;
+    const file = marker.findFile(line, col, href);
+    if (file === null) return undefined;
+    const preview = file ? undefined : findWikiPreview(href);
+    const local = file ?? (preview ? undefined : classifyLinkPath(cwd, href));
+    if (!preview && !local) return undefined;
+    const external = local?.kind === "external";
+    if (external && (previewImageMime(local.path) || (!file && !marker.matchesExternal(line, col, href))))
+      return undefined;
+    return { href, file, preview, external, path: preview && "path" in preview ? preview.path : local?.path };
+  }
+
+  function stillOnLink(target: Hover): boolean {
+    return sameLink(target, linkAt(target));
   }
 
   async function show(target: Hover): Promise<void> {
@@ -112,7 +132,7 @@ export function createHoverPreview(
       draw = () => renderWikiGroupPreview(preview, excerpts, theme, width, height);
     } else {
       if (!path) return;
-      const lineRange = preview ? undefined : parseLineRange(target.href);
+      const lineRange = preview ? undefined : parseLineRange(target.file?.originalHref ?? target.href);
       const excerpt = await readExcerpt(external ? parse(path).root : cwd, path, controller.signal, lineRange);
       if (!excerpt) return;
       draw = () =>
@@ -120,8 +140,8 @@ export function createHoverPreview(
           ? renderWikiPreview(excerpt, theme, width, height)
           : { width, lines: renderFilePreview(theme, excerpt, width, height) };
     }
-    if (hover !== target || tui.hasOverlay() || !stillOnLink(target)) return;
-    if (tui.terminal.columns !== columns || tui.terminal.rows !== rows) {
+    if (hover !== target) return;
+    if (tui.hasOverlay() || !stillOnLink(target) || tui.terminal.columns !== columns || tui.terminal.rows !== rows) {
       hide();
       return;
     }
@@ -160,28 +180,15 @@ export function createHoverPreview(
       hide();
       return;
     }
-    const line = screenLine(point.row);
-    const href = getOsc8LinkAtColumn(hoverLinkLine(line), point.col);
-    const preview = href ? findWikiPreview(href) : undefined;
-    if (
-      hover &&
-      href === hover.href &&
-      point.row === hover.row &&
-      preview === hover.preview &&
-      (!hover.external || marker.matches(line, point.col, href))
-    ) {
+    const link = linkAt(point);
+    if (hover && point.row === hover.row && sameLink(hover, link)) {
       hover.col = point.col;
       return;
     }
     hide();
-    if (!href || tui.hasOverlay()) return;
-    const local = preview ? undefined : classifyLinkPath(cwd, href);
-    if (!preview && !local) return;
-    const external = local?.kind === "external";
-    if (external && (previewImageMime(local.path) || !marker.matches(line, point.col, href))) return;
-    const path = preview && "path" in preview ? preview.path : local?.path;
+    if (!link || tui.hasOverlay()) return;
 
-    const target: Hover = { ...point, href, path, external, preview, controller: new AbortController() };
+    const target: Hover = { ...point, ...link, controller: new AbortController() };
     hover = target;
     viewport = { columns: tui.terminal.columns, rows: tui.terminal.rows };
     timer = setTimeout(() => void show(target), HOVER_DELAY_MS);
