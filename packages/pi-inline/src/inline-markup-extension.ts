@@ -156,7 +156,6 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
   }
 
   pi.registerCommand("inline", { description: "Configure inline markup and the prompt hint", handler });
-  pi.registerCommand("inline-markup", { description: "Open /inline (compatibility alias)", handler });
 
   pi.on("before_agent_start", (event, ctx) => {
     if (ctx.mode !== "tui" || !session || session.owner !== ctx.sessionManager || !session.prompt?.enabled) return;

@@ -51,7 +51,7 @@ export async function startInlineSession(
     start({ type: "session_start", reason: "startup" }, { ...ctx, mode });
   await startWidget();
   const commands = new Map(registerCommand.mock.calls);
-  expect([...commands.keys()]).toEqual(["inline", "inline-markup"]);
+  expect([...commands.keys()]).toEqual(["inline"]);
   expect(registerMarkdownTransformer).toHaveBeenCalledOnce();
   expect(setWidget).toHaveBeenCalledOnce();
   const [[transform]] = registerMarkdownTransformer.mock.calls;
@@ -63,8 +63,8 @@ export async function startInlineSession(
     setWidget,
     startWidget,
     renderWidget: (width: number) => widget?.render(width) ?? [],
-    runCommand: (args = "", mode: ExtensionContext["mode"] = "tui", route = "inline") =>
-      commands.get(route)?.handler(args, { ...ctx, mode }),
+    runCommand: (args = "", mode: ExtensionContext["mode"] = "tui") =>
+      commands.get("inline")?.handler(args, { ...ctx, mode }),
     setWikilinks(enabled: boolean) {
       settings.mockImplementationOnce(async (_ctx, { setWikilinks }) => {
         setWikilinks(enabled);
