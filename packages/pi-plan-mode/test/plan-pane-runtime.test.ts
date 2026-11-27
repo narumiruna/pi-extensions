@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,15 +9,22 @@ import {
   ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, Text, VStack } from "@earendil-works/pi-tui";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import type { PlanModeState } from "../src/state.js";
 import { createPlanPaneHost, PANE_KEY } from "./plan-pane-support.js";
 import { createMockContext, createMockPi } from "./support.js";
 
 const stateEntry = (data: PlanModeState) => ({ type: "custom", customType: "plan-mode-state", data });
 
-async function fixture(mode: ExtensionContext["mode"] = "tui", planPane: "left" | "right" | "off" = "right") {
-  const directory = await mkdtemp(join(tmpdir(), "pi-plan-pane-runtime-"));
+type RuntimeOptions = NonNullable<Parameters<typeof import("../src/plan-mode.js").default>[1]>;
+
+async function fixture(
+  mode: ExtensionContext["mode"] = "tui",
+  planPane?: "left" | "right" | "off",
+  options: RuntimeOptions & { agentDirectory?: string } = {},
+) {
+  const directory = options.agentDirectory ?? (await mkdtemp(join(tmpdir(), "pi-plan-pane-runtime-")));
+  const settingsPath = join(directory, "pi-plan-mode.json");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = directory;
   initTheme("dark");
@@ -32,7 +39,7 @@ async function fixture(mode: ExtensionContext["mode"] = "tui", planPane: "left" 
       terminal.host.addInputListener(listener),
     sessionManager: { getSessionId: () => "pane", getBranch: () => branch, getEntries: () => branch },
   });
-  const ctx: ExtensionContext = context.ctx;
+  let ctx: ExtensionContext = context.ctx;
   const setWidget = ctx.ui.setWidget;
   ctx.ui.setWidget = ((...args: Parameters<ExtensionContext["ui"]["setWidget"]>) => {
     setWidget(...args);
@@ -50,12 +57,16 @@ async function fixture(mode: ExtensionContext["mode"] = "tui", planPane: "left" 
     terminal.stop();
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-    await rm(directory, { recursive: true, force: true });
+    if (!options.agentDirectory) await rm(directory, { recursive: true, force: true });
   }
   try {
     const { default: planMode } = await import("../src/plan-mode.js");
     planMode(mock.pi, {
-      readSettings: async () => ({ kind: "loaded", settings: { thinkingLevel: "inherit", planPane } }),
+      settingsPath,
+      ...(planPane
+        ? { readSettings: async () => ({ kind: "loaded", settings: { thinkingLevel: "inherit", planPane } }) }
+        : {}),
+      ...options,
     });
     await emit("session_start", { reason: "startup" });
     const command = mock.commands.get("plan");
@@ -67,18 +78,31 @@ async function fixture(mode: ExtensionContext["mode"] = "tui", planPane: "left" 
     return {
       close,
       context,
+      ctx,
       emit,
       frame,
       invoke,
       directory,
+      settingsPath,
       mock,
       terminal,
+      async divider() {
+        const first = (await frame()).split("\n")[0] ?? "";
+        return first.indexOf("│") + 1;
+      },
+      mouse(button: number, column: number, suffix = "M") {
+        terminal.send(`\u001b[<${button};${column};4${suffix}`);
+      },
       togglePane() {
         terminal.send("\u001bOS");
         mock.shortcuts.get("f4")?.handler(ctx);
       },
       setBranch(entries: unknown[]) {
         branch = entries;
+      },
+      replaceSession() {
+        ctx = { ...ctx, sessionManager: { ...ctx.sessionManager } };
+        return emit("session_start", { reason: "resume" });
       },
       complete: (id: string, plan: string) =>
         tool.execute(id, { plan }, undefined, undefined, ctx as Parameters<typeof tool.execute>[4]),
@@ -93,6 +117,191 @@ async function fixture(mode: ExtensionContext["mode"] = "tui", planPane: "left" 
     throw error;
   }
 }
+
+test("a completed divider drag persists across workflows, renderers, and a fresh runtime", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-persist-pane-"));
+  try {
+    const f = await fixture("tui", undefined, { agentDirectory: directory });
+    const { readPlanModeSettings } = await import("../src/settings.js");
+    try {
+      await f.complete("resize", "# Resize me");
+      assert.equal(await f.divider(), 50);
+      await assert.rejects(access(f.settingsPath), { code: "ENOENT" });
+
+      f.mouse(0, 50);
+      f.mouse(32, 60);
+      assert.equal(await f.divider(), 60);
+      await assert.rejects(access(f.settingsPath), { code: "ENOENT" });
+      f.mouse(0, 60, "m");
+      assert.deepEqual(await readPlanModeSettings(f.settingsPath), {
+        kind: "loaded",
+        settings: { thinkingLevel: "inherit", planPaneWidthRatio: 40 / 99 },
+      });
+      f.togglePane();
+      assert.equal(await f.divider(), 0);
+      f.togglePane();
+      assert.equal(await f.divider(), 60);
+
+      f.terminal.switchMode("regular");
+      assert.equal(await f.divider(), 0);
+      f.terminal.switchMode("fullscreen");
+      await f.frame();
+      assert.equal(await f.divider(), 60);
+      await f.invoke("exit");
+      await f.invoke("start");
+      await f.complete("next", "# New Plan");
+      assert.equal(await f.divider(), 60);
+    } finally {
+      await f.close();
+    }
+
+    vi.resetModules();
+    const fresh = await fixture("tui", undefined, { agentDirectory: directory });
+    try {
+      await fresh.complete("fresh", "# Fresh Plan");
+      assert.equal(await fresh.divider(), 60);
+    } finally {
+      await fresh.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("queued drag saves preserve concurrent settings and roll back to the last successful width", async () => {
+  const { readPlanModeSettings, updatePlanModeSettings } = await import("../src/settings.js");
+  const ui = await import("../src/interactive-ui.js");
+  const firstSave = Promise.withResolvers<void>();
+  const releaseFirstSave = Promise.withResolvers<void>();
+  const menuSaveQueued = Promise.withResolvers<void>();
+  let attempts = 0;
+  const f = await fixture("tui", undefined, {
+    loadInteractiveUi: async () => ({
+      ...ui,
+      showPlanModeSettings: async (_ctx, options) => {
+        const update = options.updateSettings ?? updatePlanModeSettings;
+        const save = update({ planPane: "left" }, { settingsPath: options.settingsPath });
+        menuSaveQueued.resolve();
+        options.onSaved(await save);
+        return { kind: "closed", reason: "close" };
+      },
+    }),
+    updateSettings: (patch, options) => {
+      if (patch.planPaneWidthRatio === undefined) return updatePlanModeSettings(patch, options);
+      const attempt = ++attempts;
+      return updatePlanModeSettings(patch, {
+        ...options,
+        beforeRename: async () => {
+          if (attempt === 1) {
+            firstSave.resolve();
+            await releaseFirstSave.promise;
+          } else if (attempt === 2) {
+            throw new Error("resize publication failed");
+          }
+        },
+      });
+    },
+  });
+  const notify = vi.spyOn(f.ctx.ui, "notify");
+  let menu: Promise<unknown> | undefined;
+  try {
+    await writeFile(f.settingsPath, '{"future":{"keep":true}}');
+    await f.complete("race", "# Resize");
+    assert.equal(await f.divider(), 50);
+    f.mouse(0, 50);
+    f.mouse(32, 60);
+    f.mouse(0, 60, "m");
+    await firstSave.promise;
+
+    menu = Promise.resolve(f.invoke("settings"));
+    await menuSaveQueued.promise;
+    f.mouse(0, 60);
+    f.mouse(32, 65);
+    f.mouse(0, 65, "m");
+    f.togglePane();
+    f.togglePane();
+    assert.equal(await f.divider(), 65);
+    releaseFirstSave.resolve();
+    await menu;
+    await vi.waitFor(async () => assert.equal(await f.divider(), 41), { timeout: 2_000 });
+    assert.ok(notify.mock.calls.some(([message]) => message.includes("resize publication failed")));
+    assert.deepEqual(await readPlanModeSettings(f.settingsPath), {
+      kind: "loaded",
+      settings: { thinkingLevel: "inherit", planPane: "left", planPaneWidthRatio: 40 / 99 },
+    });
+
+    f.mouse(0, 41);
+    f.mouse(32, 45);
+    f.mouse(0, 45, "m");
+    await vi.waitFor(async () => {
+      const loaded = await readPlanModeSettings(f.settingsPath);
+      assert.equal(loaded.kind === "loaded" && loaded.settings.planPaneWidthRatio, 44 / 99);
+    });
+    assert.equal(await f.divider(), 45);
+    assert.deepEqual(JSON.parse(await readFile(f.settingsPath, "utf8")), {
+      future: { keep: true },
+      planPane: "left",
+      planPaneWidthRatio: 44 / 99,
+    });
+  } finally {
+    releaseFirstSave.resolve();
+    try {
+      await menu;
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+test.each(["replacement", "reload"] as const)("session %s reads the completed width save", async (boundary) => {
+  const { updatePlanModeSettings } = await import("../src/settings.js");
+  const reached = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const f = await fixture("tui", undefined, {
+    updateSettings: (patch, options) =>
+      updatePlanModeSettings(patch, {
+        ...options,
+        beforeRename: async () => {
+          reached.resolve();
+          await release.promise;
+        },
+      }),
+  });
+  let transition: Promise<void> | undefined;
+  try {
+    await f.complete("before-boundary", "# Plan before boundary");
+    assert.equal(await f.divider(), 50);
+    f.mouse(0, 50);
+    f.mouse(32, 60);
+    f.mouse(0, 60, "m");
+    await reached.promise;
+    f.setBranch([stateEntry({ enabled: true, awaitingAction: true, latestPlan: "# Restored Plan" })]);
+
+    let settled = false;
+    transition = (async () => {
+      if (boundary === "reload") {
+        await f.emit("session_shutdown", { reason: "reload" });
+        await f.emit("session_start", { reason: "reload" });
+      } else {
+        await f.replaceSession();
+      }
+      settled = true;
+    })();
+    assert.equal(await f.divider(), 0);
+    assert.equal(settled, false);
+    release.resolve();
+    await transition;
+    assert.equal(await f.divider(), 60);
+    assert.match(await f.frame(), /Restored Plan/u);
+  } finally {
+    release.resolve();
+    try {
+      await transition;
+    } finally {
+      await f.close();
+    }
+  }
+});
 
 test("Plan pane reflects only accepted plans on the active branch", async () => {
   const f = await fixture();

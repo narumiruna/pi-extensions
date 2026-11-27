@@ -129,6 +129,7 @@ test("pane settings apply on save and reject obsolete or invalid watcher reads",
       ctx,
     );
     assert.match(frame(), /^history .*│Plan/u);
+    assert.equal(frame().indexOf("│"), 49);
     const watcher = watches.at(-1);
     assert.ok(watcher);
     watcher.listener("change", "pi-plan-mode.json");
@@ -150,6 +151,19 @@ test("pane settings apply on save and reject obsolete or invalid watcher reads",
     watcher.listener("rename", "pi-plan-mode.json");
     await vi.advanceTimersByTimeAsync(75);
     assert.match(frame(), /^history .*│Plan/u);
+
+    const root = Reflect.get(terminal.fullscreen, "layoutRoot");
+    terminal.send("\u001b[<0;50;4M");
+    terminal.send("\u001b[<32;56;4M");
+    assert.equal(frame().indexOf("│"), 55);
+    reads.mockResolvedValueOnce({ kind: "loaded", settings: { thinkingLevel: "inherit", planPaneWidthRatio: 0.4 } });
+    watcher.listener("rename", "pi-plan-mode.json");
+    await vi.advanceTimersByTimeAsync(75);
+    assert.equal(frame().indexOf("│"), 59);
+    terminal.send("\u001b[<32;65;4M");
+    terminal.send("\u001b[<0;65;4m");
+    assert.equal(frame().indexOf("│"), 59, "an external ratio change cancels the in-progress drag");
+    assert.equal(Reflect.get(terminal.fullscreen, "layoutRoot"), root);
   } finally {
     await mock.events.get("session_shutdown")?.[0]?.({}, ctx);
     vi.useRealTimers();

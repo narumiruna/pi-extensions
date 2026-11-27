@@ -11,6 +11,7 @@ import {
   configuredPlanExportPath,
   configuredPlanModeToggleShortcut,
   configuredPlanPane,
+  configuredPlanPaneWidthRatio,
   normalizePlanModeSettings,
   readPlanModeSettings,
   updatePlanModeSettings,
@@ -47,6 +48,19 @@ test("Plan pane settings default to right and accept only supported placements",
   }
   for (const planPane of ["bottom", "RIGHT", true, null, { side: "left" }]) {
     assert.equal(normalizePlanModeSettings({ planPane }), undefined);
+  }
+});
+
+test("Plan pane width defaults to half and accepts only finite positive proportions below one", () => {
+  assert.equal(configuredPlanPaneWidthRatio({ thinkingLevel: "inherit" }), 0.5);
+  for (const planPaneWidthRatio of [0.01, 0.4, 0.5, 0.99]) {
+    const settings = normalizePlanModeSettings({ planPaneWidthRatio });
+    assert.deepEqual(settings, { thinkingLevel: "inherit", planPaneWidthRatio });
+    assert.ok(settings);
+    assert.equal(configuredPlanPaneWidthRatio(settings), planPaneWidthRatio);
+  }
+  for (const planPaneWidthRatio of [-1, 0, 1, 1.01, "0.5", undefined, null, NaN, Infinity, -Infinity]) {
+    assert.equal(normalizePlanModeSettings({ planPaneWidthRatio }), undefined);
   }
 });
 
@@ -356,9 +370,9 @@ test("Plan-mode settings refuse invalid documents and preserve atomic publicatio
   const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-invalid-"));
   const settingsPath = join(directory, "pi-plan-mode.json");
   try {
-    for (const invalid of ["{mock-sensitive-token", '{"thinkingLevel":"huge"}\n']) {
+    for (const invalid of ["{mock-sensitive-token", '{"thinkingLevel":"huge"}\n', '{"planPaneWidthRatio":1}\n']) {
       await writeFile(settingsPath, invalid);
-      await assert.rejects(updatePlanModeSettings({ thinkingLevel: "high" }, { settingsPath }), (error: unknown) => {
+      await assert.rejects(updatePlanModeSettings({ planPaneWidthRatio: 0.4 }, { settingsPath }), (error: unknown) => {
         assert.match(String(error), /invalid (?:JSON|settings shape)/i);
         assert.doesNotMatch(String(error), /mock-sensitive-token/);
         return true;
@@ -430,7 +444,10 @@ test("Plan-mode settings serialize updates, coordinate reads, and recover after 
       },
       { settingsPath },
     );
-    const third = updatePlanModeSettings({ defaultPlanExportPath: "ordered/PLAN.md" }, { settingsPath });
+    const third = updatePlanModeSettings(
+      { defaultPlanExportPath: "ordered/PLAN.md", planPaneWidthRatio: 0.4 },
+      { settingsPath },
+    );
     const coordinatedRead = readPlanModeSettings(settingsPath);
     await firstReached;
     releaseFirst();
@@ -441,6 +458,7 @@ test("Plan-mode settings serialize updates, coordinate reads, and recover after 
         thinkingLevel: "medium",
         implementationPlanRetention: "clear-after-first-run",
         defaultPlanExportPath: "ordered/PLAN.md",
+        planPaneWidthRatio: 0.4,
       },
     });
 
@@ -460,6 +478,7 @@ test("Plan-mode settings serialize updates, coordinate reads, and recover after 
       thinkingLevel: "max",
       implementationPlanRetention: "clear-after-first-run",
       defaultPlanExportPath: "ordered/PLAN.md",
+      planPaneWidthRatio: 0.4,
     });
   } finally {
     releaseFirst();

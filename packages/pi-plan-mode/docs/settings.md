@@ -46,7 +46,11 @@ The shortcut is disabled when `toggleShortcut` is omitted.
 
 The pane opens on a compatible Pi fullscreen layout without taking keyboard focus, and only when the managed draft or completed snapshot has content to show. Missing, blank, or unreadable drafts do not open a pane; existing tool errors still appear in the conversation. Read-only workflows only show completed plans. The pane closes when Plan mode ends, including when you save the plan for later or start implementation. Regular, RPC, print, and JSON modes do not display the pane.
 
-From the main editor, press **F4** to hide or reopen the pane when there is content and the layout has room (at least 80 columns and 12 rows). Close any focused questionnaire or menu before using it. Hiding lasts across draft edits, completion, resizing, and placement changes, but resets when you start a new workflow, switch sessions or branches, or run `/reload`. Reopening uses the configured side and default width, and starts at the top. The shortcut never overrides `off` or writes to the settings file.
+From the main editor, press **F4** to hide or reopen the pane when there is content and the layout has room (at least 80 columns and 12 rows). Close any focused questionnaire or menu before using it. Hiding lasts across draft edits, completion, resizing, and placement changes, but resets when you start a new workflow, switch sessions or branches, or run `/reload`. Reopening uses the configured side and last saved width, and starts at the top. The shortcut never overrides `off` or writes to the settings file.
+
+The pane starts at half the terminal width after reserving one column for the divider. Drag the divider with the left mouse button and release it to save the new width. The pane keeps at least 24 columns and the conversation at least 48. Resizing the terminal can limit or hide the pane but never changes the saved width.
+
+The optional `planPaneWidthRatio` in the user settings file stores a number greater than `0` and less than `1`, shared across both sides, projects, sessions, and restarts that use the same Pi agent directory. Set it manually (for example, `0.4` for 40%) or remove it to restore the default of `0.5`. Valid edits to the watched file apply without restarting Pi. A failed drag save restores the last confirmed width.
 
 Plan mode does not register the pane shortcut if F4 is already assigned to an effective Pi keybinding or the loaded **Plan mode shortcut**. See `/hotkeys` for the registered binding. A custom editor must forward Pi extension shortcuts to support F4.
 

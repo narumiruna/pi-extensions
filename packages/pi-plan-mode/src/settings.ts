@@ -24,6 +24,7 @@ export const IMPLEMENTATION_THINKING_LEVELS = ["off", "minimal", "low", "medium"
 export const IMPLEMENTATION_PLAN_RETENTIONS = ["clear-on-start", "clear-after-first-run", "keep"] as const;
 export const DEFAULT_PLAN_EXPORT_PATH = "PLAN.md";
 export const PLAN_PANE_PLACEMENTS = ["right", "left", "off"] as const;
+export const DEFAULT_PLAN_PANE_WIDTH_RATIO = 0.5;
 const MODIFIERS = new Set(["ctrl", "shift", "alt", "super"]);
 const BASE_KEYS = new Set([
   ..."abcdefghijklmnopqrstuvwxyz0123456789",
@@ -94,6 +95,7 @@ export interface PlanModeSettings {
   safeSubcommands?: SafeSubcommands;
   toggleShortcut?: KeyId;
   planPane?: PlanPanePlacement;
+  planPaneWidthRatio?: number;
 }
 export interface PlanModeSettingsPatch {
   thinkingLevel?: PlanModeThinkingLevel;
@@ -104,6 +106,7 @@ export interface PlanModeSettingsPatch {
   defaultPlanExportPath?: string | null;
   toggleShortcut?: KeyId | null;
   planPane?: PlanPanePlacement;
+  planPaneWidthRatio?: number;
 }
 export interface UpdatePlanModeSettingsOptions {
   settingsPath?: string;
@@ -179,6 +182,11 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
     const placement = normalizePlanPanePlacement(Reflect.get(value, "planPane"));
     if (!placement) return undefined;
     settings.planPane = placement;
+  }
+  if (Object.hasOwn(value, "planPaneWidthRatio")) {
+    const ratio = value.planPaneWidthRatio;
+    if (typeof ratio !== "number" || !Number.isFinite(ratio) || ratio <= 0 || ratio >= 1) return undefined;
+    settings.planPaneWidthRatio = ratio;
   }
   if (Object.hasOwn(value, "safeSubcommands")) {
     const safeSubcommands = normalizeSafeSubcommands(Reflect.get(value, "safeSubcommands"));
@@ -336,6 +344,7 @@ export function updatePlanModeSettings(
       updated.toggleShortcut = patch.toggleShortcut;
     }
     if (patch.planPane !== undefined) updated.planPane = patch.planPane;
+    if (patch.planPaneWidthRatio !== undefined) updated.planPaneWidthRatio = patch.planPaneWidthRatio;
     const settings = normalizePlanModeSettings(updated);
     if (!settings) throw invalidSettingsError(settingsPath, "invalid settings shape");
     await publishSettings(settingsPath, updated, options.signal, options.beforeRename);
@@ -519,6 +528,10 @@ export function configuredPlanModeToggleShortcut(settings: PlanModeSettings): Ke
 
 export function configuredPlanPane(settings: PlanModeSettings): PlanPanePlacement {
   return settings.planPane ?? "right";
+}
+
+export function configuredPlanPaneWidthRatio(settings: PlanModeSettings): number {
+  return settings.planPaneWidthRatio ?? DEFAULT_PLAN_PANE_WIDTH_RATIO;
 }
 
 export function normalizePlanPanePlacement(value: unknown): PlanPanePlacement | undefined {

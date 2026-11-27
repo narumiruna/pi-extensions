@@ -16,6 +16,7 @@ import {
   type PlanPaneSide,
 } from "./fullscreen-plan-layout.js";
 import type { DraftPreview } from "./plan-draft.js";
+import { DEFAULT_PLAN_PANE_WIDTH_RATIO } from "./settings.js";
 
 type PlanPaneContent = string | DraftPreview | undefined;
 type PaneDocument = { raw: string; text: string; completed: boolean };
@@ -35,6 +36,8 @@ interface PaneBinding {
   ui: ExtensionContext["ui"];
   side: PlanPaneSide;
   document: PaneDocument;
+  widthRatio: number;
+  onResize: ((ratio: number) => void) | undefined;
   widget?: PlanPaneWidget;
 }
 
@@ -66,7 +69,13 @@ export function createPlanPaneController() {
     showsCompletedPlan(session: ExtensionContext["sessionManager"], plan: string) {
       return binding?.session === session && binding.widget?.showsCompletedPlan(plan) === true;
     },
-    update(ctx: ExtensionContext, placement: PlanPaneSide | "off", plan: PlanPaneContent) {
+    update(
+      ctx: ExtensionContext,
+      placement: PlanPaneSide | "off",
+      plan: PlanPaneContent,
+      widthRatio = DEFAULT_PLAN_PANE_WIDTH_RATIO,
+      onResize?: (ratio: number) => void,
+    ) {
       if (ctx.mode !== "tui" || !ctx.hasUI || placement === "off" || typeof tuiCore.ScrollView !== "function") {
         clear();
         return;
@@ -83,17 +92,37 @@ export function createPlanPaneController() {
         !binding.widget?.disposed
       ) {
         binding.document = document;
+        binding.widthRatio = widthRatio;
+        binding.onResize = onResize;
         binding.widget?.setDocument(document);
+        binding.widget?.setWidthRatio(widthRatio);
         return;
       }
       clear();
-      const owner: PaneBinding = { session: ctx.sessionManager, ui: ctx.ui, side: placement, document };
+      const owner: PaneBinding = {
+        session: ctx.sessionManager,
+        ui: ctx.ui,
+        side: placement,
+        document,
+        widthRatio,
+        onResize,
+      };
       binding = owner;
       try {
         ctx.ui.setWidget(WIDGET_KEY, (tui, theme) => {
           if (binding !== owner) return { render: () => [], invalidate() {} };
           owner.widget?.dispose();
-          owner.widget = new PlanPaneWidget(tui, theme, owner.side, owner.document, hidden);
+          owner.widget = new PlanPaneWidget(
+            tui,
+            theme,
+            owner.side,
+            owner.document,
+            hidden,
+            owner.widthRatio,
+            (ratio) => {
+              if (binding === owner) owner.onResize?.(ratio);
+            },
+          );
           return owner.widget;
         });
       } catch {
@@ -117,6 +146,8 @@ class PlanPaneWidget implements Component {
     private readonly side: PlanPaneSide,
     private document: PaneDocument,
     private hidden: boolean,
+    private widthRatio: number,
+    private readonly onResize: (ratio: number) => void,
   ) {
     this.body = new PlanPaneBody(theme, document);
     this.scroll = createPaneScrollView(this.body, {
@@ -143,6 +174,11 @@ class PlanPaneWidget implements Component {
     this.body.setDocument(document);
     this.scroll.scrollToStart();
     if (this.tui?.mode === "fullscreen") this.tui.requestRender();
+  }
+
+  setWidthRatio(ratio: number) {
+    this.widthRatio = ratio;
+    this.layout?.setWidthRatio(ratio);
   }
 
   setHidden(hidden: boolean): boolean {
@@ -200,7 +236,15 @@ class PlanPaneWidget implements Component {
     this.attempted.add(renderer);
     this.unmount();
     try {
-      this.layout = mountFullscreenPlanLayout(this.tui, renderer, this.side, this.scroll, this.theme);
+      this.layout = mountFullscreenPlanLayout(
+        this.tui,
+        renderer,
+        this.side,
+        this.scroll,
+        this.theme,
+        this.widthRatio,
+        this.onResize,
+      );
     } catch {
       return;
     }
