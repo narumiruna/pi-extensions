@@ -102,7 +102,7 @@ test("decorates code blocks alongside native file links and applies a saved copy
   const source = "[[Note]] [README](./README.md)\n\n```js\nconst example = 3;\n```";
   const click = session.draw(source);
   expect(click.join("\n")).toContain("pi-inline-code-");
-  expect(click.map(stripTerminalSequences).join("\n")).not.toContain("[Copy]");
+  expect(click.map(stripTerminalSequences).join("\n")).not.toContain("Copy code");
   const saveMode = async (mode: "click" | "button" | "off") => {
     session.settings.mockImplementationOnce(async (_ctx, options) => {
       expect(await options.saveCodeBlockCopyMode(mode, options.signal)).toBe(true);
@@ -113,7 +113,7 @@ test("decorates code blocks alongside native file links and applies a saved copy
   try {
     await saveMode("button");
     const button = session.draw(source);
-    expect(button.map(stripTerminalSequences).join("\n")).toContain("[Copy]");
+    expect(button.map(stripTerminalSequences).join("\n")).toContain("Copy code");
     expect(button.join("\n")).toContain("./README.md");
     await saveMode("off");
     expect(session.draw(source).join("\n")).not.toContain("pi-inline-code-");

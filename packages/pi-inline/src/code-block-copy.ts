@@ -12,7 +12,8 @@ import {
 import type { CodeBlockCopyMode } from "./settings.js";
 
 const parser = new Marked();
-const BUTTON = "[Copy]";
+const BUTTON = " Copy code ";
+const COMPACT_BUTTON = " Copy ";
 const COPY_DELAY = 501;
 const MARKER_OPEN = "\x1b]8;id=pi-inline-code-";
 const MARKER_CLOSE = "\x1b]8;id=pi-inline-code-end;\x07";
@@ -22,6 +23,7 @@ const MARKER = new RegExp(
 );
 const SGR = "\x1b[<";
 const PRIMARY = /^(0|3);(\d+);(\d+)([Mm])$/;
+const POINTER_MOTION = /^35;\d+;\d+M$/;
 
 export function supportsCodeBlockCopy(version = VERSION): boolean {
   return version === "1.6.0" || version === "1.6.1";
@@ -57,10 +59,15 @@ function codePositions(source: string): Map<number, string> {
   return positions;
 }
 
-function markedRow(id: string, index: number, kind: "c" | "b" | "r", line: string): string {
+function markedRow(
+  id: string,
+  index: number,
+  kind: "c" | "b" | "r",
+  line: string,
+  bounds?: readonly [number, number],
+): string {
   const text = stripTerminalSequences(line);
-  const left = visibleWidth(text.match(/^\s*/u)?.[0] ?? "");
-  const right = visibleWidth(text.trimEnd());
+  const [left, right] = bounds ?? [visibleWidth(text.match(/^\s*/u)?.[0] ?? ""), visibleWidth(text.trimEnd())];
   const escaped = line.replaceAll("<!--", `<${MARKER_CLOSE}!--`);
   return `<!-- -->${MARKER_OPEN}${id}-${index}-${kind}-${left}-${right};\x07${RESET_FG}${escaped}${MARKER_CLOSE}`;
 }
@@ -130,10 +137,15 @@ export function createCodeBlockCopy(
     const width = context.availableWidth;
     if (
       !(width >= 1) ||
-      (mode === "button" && width < BUTTON.length) ||
+      (mode === "button" && width < COMPACT_BUTTON.length) ||
       (!source.includes("```") && !source.includes("~~~"))
     )
       return source;
+    const buttonEnd = Math.max(COMPACT_BUTTON.length, width - 1);
+    const buttonLabel = buttonEnd >= BUTTON.length ? BUTTON : COMPACT_BUTTON;
+    const buttonStart = buttonEnd - buttonLabel.length;
+    const button =
+      mode === "button" ? " ".repeat(buttonStart) + theme.bg("selectedBg", theme.fg("text", buttonLabel)) : undefined;
     const normalized = source.replace(/\r\n?/g, "\n");
     const tokens = parser.lexer(normalized);
     const expanded = normalized.includes("\t") ? codePositions(normalized.replaceAll("\t", "   ")) : undefined;
@@ -171,7 +183,7 @@ export function createCodeBlockCopy(
       const id = createHmac("sha256", key).update(`${generation}\0${start}\0${text}`).digest("hex");
       const rows = new Markdown(token.raw, 0, 0, markdownTheme).render(width);
       const stamped = rows.map((line, row) => markedRow(id, row, mode === "click" ? "c" : "r", line));
-      if (mode === "button") stamped.push(markedRow(id, rows.length, "b", theme.fg("accent", BUTTON)));
+      if (button !== undefined) stamped.push(markedRow(id, rows.length, "b", button, [buttonStart, buttonEnd]));
       output += normalized.slice(copied, start) + stamped.join("\n");
       if (tokens[index + 1] && tokens[index + 1].type !== "space") {
         output += token.raw.endsWith("\n") ? "\n\n" : "\n";
@@ -196,7 +208,7 @@ export function createCodeBlockCopy(
       count++;
       const clean = withoutMarker(line, marker, { prefix: foreground[0], suffix: foreground[1] });
       if (marker[3] === "b") {
-        if (clean === undefined || stripTerminalSequences(clean).trim() !== BUTTON) return source;
+        if (clean === undefined || stripTerminalSequences(clean).trim() !== buttonLabel.trim()) return source;
       } else if (clean === undefined || clean !== original[originalRow++]) return source;
     }
     if (count !== markedRows || originalRow !== original.length) return source;
@@ -242,12 +254,18 @@ export function createCodeBlockCopy(
     } finally {
       writing = false;
     }
-    if (!disposed && active === generation && fullscreen(tui)) notify(success);
+    if (disposed || active !== generation) return;
+    const viewport = fullscreen(tui);
+    if (!viewport) return;
+    if (success && typeof viewport.flash === "function") viewport.flash("Copied!");
+    else notify(success);
   }
 
   function observe(input: string): void {
     if (!supported || disposed || mode === "off") return;
-    const report = input.startsWith(SGR) && PRIMARY.exec(input.slice(SGR.length));
+    const mouse = input.startsWith(SGR) ? input.slice(SGR.length) : "";
+    if (pending !== undefined && POINTER_MOTION.test(mouse)) return;
+    const report = PRIMARY.exec(mouse);
     if (!report || (report[1] === "3" && report[4] !== "m")) {
       clearGesture();
       return;

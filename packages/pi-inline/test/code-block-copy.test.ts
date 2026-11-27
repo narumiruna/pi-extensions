@@ -15,9 +15,10 @@ import type { CodeBlockCopyMode } from "../src/settings.js";
 // biome-ignore lint/suspicious/noControlCharactersInRegex: The renderer uses OSC 8 and SGR.
 const meta = /\x1b\]8;id=pi-inline-code-(?:end;\x07|[a-f0-9]{64}-\d+-[cbr]-\d+-\d+;\x07\x1b\[39m)/g;
 const removeMeta = (text: string) => text.replace(meta, "");
+const buttonBackground = "\x1b[44m";
 const theme = {
   fg: (_role: string, text: string) => text,
-  bg: (_role: string, text: string) => text,
+  bg: (role: string, text: string) => (role === "selectedBg" ? `${buttonBackground}${text}\x1b[49m` : text),
 } as unknown as Theme;
 const alt = {
   mode: "fullscreen",
@@ -84,6 +85,28 @@ test("does not decorate while off, streaming, unavailable, or outside supported 
   const unavailable = createCodeBlockCopy(alt, theme, undefined, vi.fn(), vi.fn(), false);
   unavailable.setMode("button");
   expect(unavailable.transform(code, context(80))).toBe(code);
+});
+
+test.each([
+  { width: 40, label: " Copy code " },
+  { width: 12, label: " Copy code " },
+  { width: 11, label: " Copy " },
+  { width: 6, label: " Copy " },
+  { width: 5, label: undefined },
+])("uses a right-aligned solid button at $width columns", ({ width, label }) => {
+  const copy = createCodeBlockCopy(alt, theme, undefined, vi.fn(), vi.fn(), true);
+  copy.setMode("button");
+  const rows = new Markdown(code, 0, 0, getMarkdownTheme(), undefined, {
+    transform: (source, availableWidth) => copy.transform(source, context(availableWidth)),
+  }).render(width);
+  expect(rows.every((line) => visibleWidth(line) <= width)).toBe(true);
+  const row = rows.find((line) => line.includes(buttonBackground));
+  if (label === undefined) {
+    expect(row).toBeUndefined();
+    return;
+  }
+  expect(row).toContain(`${buttonBackground}${label}\x1b[49m`);
+  expect(visibleWidth(row?.split(buttonBackground)[0] ?? "")).toBe(width - label.length - Number(width > 6));
 });
 
 function fullscreen(onTestFinished: (cleanup: () => void) => void, mode: CodeBlockCopyMode = "click") {
@@ -189,36 +212,65 @@ test("copies the unwrapped source from the middle of a scrolled block without op
   expect(fixture.copyCode.mock.calls).toEqual([[fixture.longBody]]);
   expect(fixture.nativeCopy).not.toHaveBeenCalled();
   expect(fixture.openUrl).not.toHaveBeenCalled();
+  expect(fixture.notify).not.toHaveBeenCalled();
+  fixture.tui.renderNow(true);
+  expect(stripTerminalSequences(fixture.tui.getScreenLines()[0]).trimEnd()).toMatch(/Copied!$/u);
 });
 
-test("copies only from the explicit button, without waiting for the double-click window", async ({
-  onTestFinished,
-}) => {
-  const fixture = fullscreen(onTestFinished, "button");
-  const bodyPoint = fixture.point();
-  fixture.click(bodyPoint.x, bodyPoint.y);
-  await vi.advanceTimersByTimeAsync(501);
-  expect(fixture.copyCode).not.toHaveBeenCalled();
-  fixture.scroll(200);
-  const button = fixture.point("[Copy]");
-  fixture.click(button.x, button.y);
-  await Promise.resolve();
-  expect(fixture.copyCode.mock.calls).toEqual([[fixture.longBody]]);
-  await Promise.resolve();
-  expect(fixture.notify).toHaveBeenCalledExactlyOnceWith(true);
-});
+test.for([0, 1])(
+  "copies after a released click followed by pointer motion (%i cells)",
+  async (offset, { onTestFinished }) => {
+    const fixture = fullscreen(onTestFinished);
+    const { x, y } = fixture.point();
+    fixture.click(x, y);
+    await vi.advanceTimersByTimeAsync(10);
+    fixture.mouse(35, x + offset, y);
+    await vi.advanceTimersByTimeAsync(490);
+    expect(fixture.copyCode).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fixture.copyCode.mock.calls).toEqual([[fixture.longBody]]);
+    expect(fixture.nativeCopy).not.toHaveBeenCalled();
+  },
+);
 
-test("normalizes user message foreground without losing the copy target or custom indentation", () => {
-  const user = {
-    fg: (role: string, text: string) => (role === "userMessageText" ? `\x1b[35m${text}\x1b[39m` : text),
-    bg: (_role: string, text: string) => `\x1b[44m${text}\x1b[49m`,
-  } as unknown as Theme;
-  const probe = createCodeBlockCopy(alt, user, "    ", vi.fn(), vi.fn(), true);
-  probe.setMode("click");
-  const source = `Before\n${code}\nAfter`;
-  const result = probe.transform(source, { ...context(60), messageType: "user" });
-  expect(result).toContain("pi-inline-code-");
-});
+test.for([-1, "Copy code".length])(
+  "copies immediately from painted button padding (offset %i)",
+  async (offset, { onTestFinished }) => {
+    const fixture = fullscreen(onTestFinished, "button");
+    const bodyPoint = fixture.point();
+    fixture.click(bodyPoint.x, bodyPoint.y);
+    await vi.advanceTimersByTimeAsync(501);
+    expect(fixture.copyCode).not.toHaveBeenCalled();
+    fixture.scroll(200);
+    const button = fixture.point("Copy code");
+    fixture.click(button.x - 2, button.y);
+    await Promise.resolve();
+    expect(fixture.copyCode).not.toHaveBeenCalled();
+    fixture.click(button.x + offset, button.y);
+    await Promise.resolve();
+    expect(fixture.copyCode.mock.calls).toEqual([[fixture.longBody]]);
+    await Promise.resolve();
+    expect(fixture.notify).not.toHaveBeenCalled();
+    fixture.tui.renderNow(true);
+    expect(stripTerminalSequences(fixture.tui.getScreenLines()[0]).trimEnd()).toMatch(/Copied!$/u);
+  },
+);
+
+test.each(["click", "button"] as const)(
+  "preserves the copy target and custom indentation in a user message (%s)",
+  (mode) => {
+    const user = {
+      fg: (role: string, text: string) => (role === "userMessageText" ? `\x1b[35m${text}\x1b[39m` : text),
+      bg: (role: string, text: string) => `${role === "selectedBg" ? buttonBackground : "\x1b[46m"}${text}\x1b[49m`,
+    } as unknown as Theme;
+    const probe = createCodeBlockCopy(alt, user, "    ", vi.fn(), vi.fn(), true);
+    probe.setMode(mode);
+    const source = `Before\n${code}\nAfter`;
+    const result = probe.transform(source, { ...context(60), messageType: "user" });
+    expect(result).toContain("pi-inline-code-");
+    if (mode === "button") expect(result).toContain(`${buttonBackground} Copy code \x1b[49m`);
+  },
+);
 
 test.for([2, 3])("preserves Pi's native selection after %i clicks", async (clicks, { onTestFinished }) => {
   const fixture = fullscreen(onTestFinished);
@@ -249,6 +301,8 @@ test("suppresses concurrent copies and ignores an old result after the mode chan
   publication.resolve();
   await Promise.resolve();
   expect(fixture.notify).not.toHaveBeenCalled();
+  fixture.tui.renderNow(true);
+  expect(fixture.tui.getScreenLines().map(stripTerminalSequences).join("\n")).not.toContain("Copied!");
 });
 
 test("reports a clipboard failure without retrying", async ({ onTestFinished }) => {
@@ -259,6 +313,8 @@ test("reports a clipboard failure without retrying", async ({ onTestFinished }) 
   await vi.advanceTimersByTimeAsync(501);
   expect(fixture.copyCode).toHaveBeenCalledOnce();
   expect(fixture.notify).toHaveBeenCalledExactlyOnceWith(false);
+  fixture.tui.renderNow(true);
+  expect(fixture.tui.getScreenLines().map(stripTerminalSequences).join("\n")).not.toContain("Copied!");
 });
 
 test("a drag copies only Pi's native selection", async ({ onTestFinished }) => {
@@ -272,13 +328,14 @@ test("a drag copies only Pi's native selection", async ({ onTestFinished }) => {
   expect(fixture.nativeCopy.mock.calls).toEqual([["visib"]]);
 });
 
-test.for(["scroll", "resize", "dispose", "overlay"] as const)(
+test.for(["scroll", "wheel", "resize", "dispose", "overlay"] as const)(
   "cancels a pending click on %s",
   async (event, { onTestFinished }) => {
     const fixture = fullscreen(onTestFinished);
     const { x, y } = fixture.point();
     fixture.click(x, y);
     if (event === "scroll") fixture.scroll(2);
+    if (event === "wheel") fixture.mouse(65, x, y);
     if (event === "resize") fixture.resize(33);
     if (event === "dispose") fixture.gestures.dispose();
     if (event === "overlay") fixture.tui.showOverlay({ render: () => ["Overlay"], invalidate() {} });

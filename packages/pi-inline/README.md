@@ -58,7 +58,9 @@ graphics support, hover over a workspace image link such as
 In fullscreen mode on a supported Pi version, single-click a fenced code block
 in a user or assistant message to copy the source without the fences or display
 wrapping. Copy waits for Pi's double-click window (about half a second), so
-double-clicking and dragging can still select part of the code.
+double-clicking and dragging can still select part of the code. Moving the
+pointer alone after release does not cancel copying. A successful copy shows
+Pi's `Copied!` message in the upper-right corner.
 
 ## 💬 Commands
 
@@ -73,9 +75,10 @@ compatibility alias.
 - **Edit Prompt Hint…** opens a multiline editor with the saved text, even if
   the hint is Off.
 - **Code Block Copy** saves and applies immediately, without a reload. **Click
-  block** keeps the original appearance. **Copy button** copies only when you
-  click `[Copy]` below a block. **Off** leaves Pi's native selection and `/copy`
-  command unchanged.
+  block** keeps the original appearance. **Copy button** adds a filled
+  `Copy code` button at the lower right of each block. Narrow views use `Copy`
+  when the full label does not fit. **Off** leaves Pi's native selection and
+  `/copy` command unchanged.
 
 After a prompt hint change is saved, Pi asks whether to reload. Choose No to
 keep the saved change without applying it to the current session. Apply it later
