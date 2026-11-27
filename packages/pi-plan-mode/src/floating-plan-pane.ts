@@ -27,6 +27,11 @@ export interface FloatingReadingPosition {
   top: number;
 }
 
+export interface FloatingAdjustment {
+  editor: Component;
+  input: string;
+}
+
 function focusedComponent(tui: TUI) {
   const screen = tui as TUI & Partial<Pick<TuiMainScreen, "getFocusedComponent">>;
   if (typeof screen.getFocusedComponent === "function") return screen.getFocusedComponent();
@@ -61,6 +66,7 @@ export function createFloatingPlanPane(
   initialDocument: PaneDocument,
   reading: FloatingReadingPosition,
   planModeShortcut: () => string | undefined,
+  onUnsupported: () => void,
 ) {
   let document = initialDocument;
   let top = reading.top;
@@ -70,6 +76,7 @@ export function createFloatingPlanPane(
   let frame: FloatingFrame | undefined;
   let host: TUI | undefined;
   let renderer: readonly Component[] | undefined;
+  let mountFocus: Component | null | undefined;
   let returnFocus: Component | undefined;
   let markdown: Markdown | undefined;
   let closed = false;
@@ -82,6 +89,16 @@ export function createFloatingPlanPane(
   const fits = (columns: number, rows: number) =>
     columns >= MIN_SIZE.columns && rows >= MIN_SIZE.rows + MAIN_INPUT_ROWS;
   const visible = () => isCurrent() && handle?.getBounds() !== undefined;
+
+  function enterAdjustment({ editor, input }: FloatingAdjustment): boolean {
+    if (!isCurrent() || !host || !handle || mainEditor(host) !== editor || !canAdjustFrom(editor)) return false;
+    const key = adjustmentKey?.();
+    if (!key || !matchesKey(input, key) || !fits(host.terminal.columns, host.terminal.rows)) return false;
+    handle.focus();
+    if (!handle.isFocused()) return false;
+    returnFocus = editor;
+    return true;
+  }
 
   function leaveAdjustment() {
     const target = returnFocus;
@@ -107,7 +124,7 @@ export function createFloatingPlanPane(
     get disposed() {
       return closed;
     },
-    open() {
+    open(pendingAdjustment?: FloatingAdjustment) {
       if (closed || opened) return;
       opened = true;
       void ui
@@ -255,9 +272,12 @@ export function createFloatingPlanPane(
                 typeof nativeHandle.isFocused !== "function"
               ) {
                 close();
+                onUnsupported();
                 return;
               }
               handle = nativeHandle;
+              if (host) mountFocus = focusedComponent(host);
+              if (pendingAdjustment && pendingAdjustment.editor === mountFocus) enterAdjustment(pendingAdjustment);
             },
           },
         )
@@ -270,7 +290,12 @@ export function createFloatingPlanPane(
       frame?.invalidate();
       if (isCurrent()) host?.requestRender();
     },
-    handleInput(data: string, canToggle: boolean, toggle: () => void) {
+    handleInput(
+      data: string,
+      canToggle: boolean,
+      toggle: () => void,
+      remount: (adjustment: FloatingAdjustment) => void,
+    ) {
       if (!isCurrent() || !host || !handle) return false;
       if (handle.isFocused() && !fits(host.terminal.columns, host.terminal.rows)) leaveAdjustment();
       if (canToggle && handle.isFocused() && matchesKey(data, "f4")) {
@@ -280,9 +305,12 @@ export function createFloatingPlanPane(
       const editor = mainEditor(host);
       const key = editor && canAdjustFrom(editor) ? adjustmentKey?.() : undefined;
       if (!editor || !key || !matchesKey(data, key) || !visible()) return false;
-      returnFocus = editor;
-      handle.focus();
-      return handle.isFocused();
+      const adjustment = { editor, input: data };
+      if (mountFocus !== editor) {
+        remount(adjustment);
+        return true;
+      }
+      return enterAdjustment(adjustment);
     },
     showsCompletedPlan(plan: string) {
       return (

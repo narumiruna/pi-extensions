@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { npmInvocation } from "../scripts/npm-invocation.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const external = await mkdtemp(join(tmpdir(), "pi-floating-artifacts-"));
+const external = await realpath(await mkdtemp(join(tmpdir(), "pi-floating-artifacts-")));
 const project = join(external, "consumer");
 await mkdir(project);
 console.log(`Floating-frame evidence: ${external}`);

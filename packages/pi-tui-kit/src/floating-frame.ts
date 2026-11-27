@@ -42,6 +42,7 @@ export class FloatingFrame implements Component, Focusable {
   readonly overlayOptions: OverlayOptions;
   private preferred: FloatingBounds | undefined;
   private drag: { start: FloatingBounds; x: number; y: number; resize: boolean } | undefined;
+  private bodyPress = false;
   private isFocused = false;
 
   constructor(private readonly options: FloatingFrameOptions) {
@@ -134,23 +135,34 @@ export class FloatingFrame implements Component, Focusable {
       return { handled: true };
     }
     const framed = hasFrame(event.width, event.height);
-    if (event.type === "press" && event.button === "left") {
+    if (event.type === "press") {
       this.drag = undefined;
+      this.bodyPress = false;
       const resize = event.x >= event.width - 2 && event.y === event.height - 1;
-      if (framed && (resize || event.y === 0)) {
+      if (event.button === "left" && framed && (resize || event.y === 0)) {
         this.drag = { start: this.bounds, x: event.screenX, y: event.screenY, resize };
         return this.options.focusOnDrag ? { capture: true, focus: true } : { capture: true };
       }
     }
     const inset = framed ? 1 : 0;
-    if (event.x < inset || event.y < inset || event.x >= event.width - inset || event.y >= event.height - inset) return;
-    return this.options.body.handleMouse?.({
+    const continuesBodyPress = this.bodyPress && (event.type === "drag" || event.type === "release");
+    if (event.type === "release") this.bodyPress = false;
+    if (
+      !continuesBodyPress &&
+      (event.x < inset || event.y < inset || event.x >= event.width - inset || event.y >= event.height - inset)
+    )
+      return;
+    const result = this.options.body.handleMouse?.({
       ...event,
       x: event.x - inset,
       y: event.y - inset,
       width: event.width - inset * 2,
       height: event.height - inset * 2,
     });
+    if (event.type === "press" && result && !("target" in result)) {
+      this.bodyPress = Boolean(result.handled || result.capture || result.focus);
+    }
+    return result;
   }
 
   private terminalSize(): FloatingViewport {

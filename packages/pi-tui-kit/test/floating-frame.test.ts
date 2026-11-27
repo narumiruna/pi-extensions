@@ -71,6 +71,52 @@ for (const Renderer of [TuiMainScreen, TuiAltScreen]) {
   });
 }
 
+test.each([{ capture: true }, { handled: true }, { focus: true }])(
+  "native fullscreen delivers body drag and release outside the frame after a %j press",
+  (claim) => {
+    const terminal = new FullscreenTerminal();
+    const tui = new TuiAltScreen(terminal);
+    const events: [string, number, number][] = [];
+    const frame = new FloatingFrame({
+      getTerminalSize: () => terminal,
+      initialBounds: () => ({ col: 4, row: 2, width: 23, height: 8 }),
+      minSize: { columns: 20, rows: 6 },
+      requestRender: () => tui.requestRender(),
+      styleTitle: (s) => s,
+      styleBorder: (s) => s,
+      title: () => " Mouse ",
+      body: {
+        render: () => [],
+        invalidate() {},
+        handleMouse: (event) => {
+          events.push([event.type, event.x, event.y]);
+          if (event.type === "press") return claim;
+        },
+      },
+    });
+    tui.start();
+    try {
+      const handle = tui.showOverlay(frame, frame.overlayOptions);
+      tui.renderNow();
+      const mouse = (code: number, x: number, y: number, suffix = "M") =>
+        terminal.input(`\x1b[<${code};${x + 1};${y + 1}${suffix}`);
+      mouse(0, 6, 4);
+      mouse(32, 35, 6);
+      mouse(0, 40, 11, "m");
+      assert.deepEqual(events, [
+        ["press", 1, 1],
+        ["drag", 30, 3],
+        ["release", 35, 8],
+      ]);
+      mouse(0, 4, 8, "m");
+      assert.equal(events.length, 3);
+      handle.hide();
+    } finally {
+      tui.stop();
+    }
+  },
+);
+
 test("floating frame reports bounded viewports, preserves cursor cells, and does not move a focused editor on drag", () => {
   const size = { columns: 100, rows: 30 };
   let invalidations = 0;

@@ -56,7 +56,7 @@ The optional `planPaneWidthRatio` stores a number greater than `0` and less than
 
 #### Floating preview (`floating`)
 
-The floating preview works in regular and fullscreen TUI. It starts near the top right and needs at least 28 columns and 10 rows. Its bounds leave four bottom screen rows clear, but it can overlap an editor that extends into the preview area. Focus stays in the main editor unless you explicitly enter adjustment. The preview waits while a Plan questionnaire is open.
+The floating preview works in regular and fullscreen TUI. It starts near the top right and needs at least 28 columns and 10 rows. Its bounds leave four bottom screen rows clear, but it can overlap an editor that extends into the preview area. Focus stays in the main editor unless you explicitly enter adjustment. The preview waits while a Plan questionnaire is open. On Pi versions without the required overlay controls, Plan Mode shows a warning instead of an empty preview. Update Pi or choose a different layout.
 
 - In fullscreen, drag the title to move the preview or its lower-right grip to resize it. Scroll inside the preview with the mouse wheel. These actions do not take keyboard focus.
 - In either renderer, press the displayed **F10**, **F11**, or **F12** shortcut from the main editor to enter adjustment. Arrow keys move, **Shift+arrow** keys resize, and **Page Up** and **Page Down** scroll. **Escape**, **Ctrl+C**, or Pi's configured interrupt key returns to the main editor without ending Plan mode.

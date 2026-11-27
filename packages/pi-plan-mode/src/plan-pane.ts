@@ -9,7 +9,7 @@ import {
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";
-import type { FloatingPlanPane, FloatingReadingPosition } from "./floating-plan-pane.js";
+import type { FloatingAdjustment, FloatingPlanPane, FloatingReadingPosition } from "./floating-plan-pane.js";
 import {
   canOpenFullscreenPlanLayout,
   type MountedPlanLayout,
@@ -48,6 +48,7 @@ interface SplitBinding extends PaneBinding {
 interface FloatingBinding extends PaneBinding {
   placement: "floating";
   pending?: object;
+  unsupported?: boolean;
   view?: FloatingPlanPane;
 }
 
@@ -58,11 +59,12 @@ export function createPlanPaneController() {
   let questions = new Set<object>();
   let planModeShortcut: string | undefined;
 
-  function reconcileFloating(owner: FloatingBinding) {
+  function reconcileFloating(owner: FloatingBinding, adjustment?: FloatingAdjustment) {
     if (hidden || questions.size > 0) {
       closeFloating(owner);
       return;
     }
+    if (owner.unsupported) return;
     if (owner.view?.disposed) closeFloating(owner);
     if (owner.pending || owner.view) return;
     const pending = {};
@@ -71,8 +73,25 @@ export function createPlanPaneController() {
       .then(({ createFloatingPlanPane }) => {
         if (binding !== owner || owner.pending !== pending) return;
         owner.pending = undefined;
-        owner.view = createFloatingPlanPane(owner.ui, owner.document, reading, () => planModeShortcut);
-        owner.view.open();
+        owner.view = createFloatingPlanPane(
+          owner.ui,
+          owner.document,
+          reading,
+          () => planModeShortcut,
+          () => {
+            if (binding !== owner || owner.unsupported) return;
+            owner.unsupported = true;
+            try {
+              owner.ui.notify(
+                "Floating Plan pane is not available in this Pi version. Update Pi or choose a different Plan pane layout.",
+                "warning",
+              );
+            } catch {
+              return;
+            }
+          },
+        );
+        owner.view.open(adjustment);
       })
       .catch(() => {
         if (owner.pending === pending) owner.pending = undefined;
@@ -129,13 +148,24 @@ export function createPlanPaneController() {
     toggle(session: ExtensionContext["sessionManager"]) {
       if (binding?.session !== session) return;
       if (binding.placement === "floating") {
-        if (questions.size === 0) toggleFloating(binding);
+        if (!binding.unsupported && questions.size === 0) toggleFloating(binding);
       } else if (binding.widget?.setHidden(!hidden)) hidden = !hidden;
     },
     handleInput(session: ExtensionContext["sessionManager"], data: string, canToggle: boolean) {
       if (binding?.session !== session || binding.placement !== "floating") return false;
       const owner = binding;
-      return owner.view?.handleInput(data, canToggle, () => toggleFloating(owner)) === true;
+      return (
+        owner.view?.handleInput(
+          data,
+          canToggle,
+          () => toggleFloating(owner),
+          (adjustment) => {
+            if (binding !== owner) return;
+            closeFloating(owner);
+            reconcileFloating(owner, adjustment);
+          },
+        ) === true
+      );
     },
     setPlanModeShortcut(shortcut: string | undefined) {
       planModeShortcut = shortcut;

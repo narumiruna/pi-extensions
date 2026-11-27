@@ -94,7 +94,7 @@ test.each(["regular", "fullscreen"] as const)(
     try {
       f.draft();
       await f.mounted();
-      const handle = f.host.overlays[0];
+      let handle = f.host.overlays[0];
       const before = handle.getBounds();
       assert.ok(before);
       assert.match(f.frame(), /Plan draft · F11 adjust/u);
@@ -118,6 +118,8 @@ test.each(["regular", "fullscreen"] as const)(
       f.host.replaceEditor();
       assert.notEqual(f.host.editor, editorAtMount);
       f.host.send(F11);
+      await f.mounted(2);
+      handle = f.host.overlays[1];
       assert.equal(handle.isFocused(), true);
       const transcriptTop = f.host.transcript.scrollTop;
       f.host.send(LEFT);
@@ -144,7 +146,7 @@ test.each(["regular", "fullscreen"] as const)(
       assert.equal(f.host.host.getFocusedComponent(), f.host.editor);
       f.host.send("y");
       assert.match(f.host.editor.getText(), /y/u);
-      assert.equal(f.host.overlays.length, 1);
+      assert.equal(f.host.overlays.length, 2);
     } finally {
       f.close();
     }
@@ -268,6 +270,88 @@ test("changing placement closes only the Plan overlay; the latest choice wins", 
     f.close();
   }
 });
+
+test("closing adjustment before a peer returns input to the replacement editor after the peer closes", async () => {
+  const f = fixture("fullscreen");
+  try {
+    f.draft();
+    await f.mounted();
+    f.host.send(F10);
+    f.host.send(LEFT);
+    f.host.send(PAGE_DOWN);
+    const moved = f.host.overlays[0].getBounds();
+    assert.ok(moved);
+    assert.doesNotMatch(f.frame(), /DraftLine00/u);
+    f.host.send("\x1b");
+    const originalEditor = f.host.editor;
+    f.host.replaceEditor();
+    f.host.send(F10);
+    await f.mounted(2);
+    assert.equal(f.host.overlays[1].isFocused(), true);
+    assert.deepEqual(f.host.overlays[1].getBounds(), moved);
+    assert.doesNotMatch(f.frame(), /DraftLine00/u);
+    const peer = f.host.host.showOverlay(new Text("Peer"));
+    f.pane.reset();
+    assert.equal(peer.isFocused(), true);
+    peer.hide();
+    assert.equal(f.host.host.getFocusedComponent(), f.host.editor);
+    f.host.send("!");
+    assert.match(f.host.editor.getText(), /!/u);
+    assert.doesNotMatch(originalEditor.getText(), /!/u);
+  } finally {
+    f.close();
+  }
+});
+
+test("an unrelated overlay keeps focus if it opens while the preview mounts for adjustment", async () => {
+  const f = fixture("fullscreen");
+  const gate = Promise.withResolvers<void>();
+  try {
+    f.draft();
+    await f.mounted();
+    f.host.replaceEditor();
+    f.host.delayNextFactory(gate.promise);
+    f.host.send(F10);
+    const peer = f.host.host.showOverlay(new Text("Peer"));
+    gate.resolve();
+    await f.mounted(2);
+    assert.equal(f.host.overlays[1].isFocused(), false);
+    assert.equal(peer.isFocused(), true);
+    peer.hide();
+    assert.equal(f.host.host.getFocusedComponent(), f.host.editor);
+  } finally {
+    gate.resolve();
+    f.close();
+  }
+});
+
+test.each(["getBounds", "focus", "unfocus", "isFocused"] as const)(
+  "an overlay without %s warns once and leaves the full completion result available",
+  async (missing) => {
+    const f = fixture("regular");
+    try {
+      const notify = vi.fn<ExtensionContext["ui"]["notify"]>();
+      const custom: ExtensionContext["ui"]["custom"] = (factory, options) =>
+        f.host.custom(factory, {
+          ...options,
+          onHandle: (handle) => options?.onHandle?.({ ...handle, [missing]: undefined }),
+        });
+      const ctx = { ...f.ctx, ui: { ...f.ctx.ui, custom, notify } };
+      f.pane.update(ctx, "floating", "# Plan ready");
+      await vi.waitFor(() => assert.equal(f.host.closes, 1));
+      assert.match(notify.mock.calls[0]?.[0] ?? "", /not available in this Pi version/u);
+      assert.equal(f.pane.showsCompletedPlan(ctx.sessionManager, "# Plan ready"), false);
+      f.pane.update(ctx, "floating", "# Revised plan");
+      f.pane.toggle(ctx.sessionManager);
+      await fullscreenMounted();
+      assert.equal(f.host.overlays.length, 1);
+      assert.equal(notify.mock.calls.length, 1);
+      assert.equal(f.host.host.getFocusedComponent(), f.host.editor);
+    } finally {
+      f.close();
+    }
+  },
+);
 
 test("replacing the UI in the same session detaches the preview from the old renderer", async () => {
   const f = fixture("fullscreen");
