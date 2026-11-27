@@ -53,7 +53,7 @@ export function interactionShortcutAvailable(bindings: Record<string, unknown>, 
 }
 
 /** Track paste markers across raw input fragments without modifying any editor input. */
-export function createInteractionInputGuard() {
+export function createInteractionInputGuard(allowEscape = false) {
   let pasting = false;
   let suffix = "";
   return (data: string) => {
@@ -76,7 +76,14 @@ export function createInteractionInputGuard() {
       const candidate = text.slice(-length);
       if (PASTE_START.startsWith(candidate) || PASTE_END.startsWith(candidate)) suffix = candidate;
     }
-    return !wasPasting && !pasting && !markerSeen && !suffix && !isKeyRelease(data) && !isKeyRepeat(data);
+    return (
+      !wasPasting &&
+      !pasting &&
+      !markerSeen &&
+      (!suffix || (allowEscape && matchesKey(data, "escape"))) &&
+      !isKeyRelease(data) &&
+      !isKeyRepeat(data)
+    );
   };
 }
 

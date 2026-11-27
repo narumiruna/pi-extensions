@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { createRpcHarness } from "@narumitw/pi-tui-kit/testing";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { listFiles, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
 import { builtinTool, createMockContext, extensionTool } from "../../../test/support.js";
 import { createPlanPaneHost } from "./plan-pane-support.js";
@@ -62,6 +62,14 @@ test("generated interactive UI stays loadable with a lazy external questionnaire
       kitImports.some((imported) => imported.kind === "dynamic-import"),
       "the questionnaire runner must remain a first-use import",
     );
+    const floatingChunks = Object.entries(metadata.outputs ?? {}).filter(([, chunk]) =>
+      chunk.imports?.some(({ path, external }) => path === "@narumitw/pi-tui-kit/floating-frame" && external),
+    );
+    assert.equal(floatingChunks.length, 1);
+    assert.match(floatingChunks[0]?.[0] ?? "", /\/chunks\/floating-plan-pane-[A-Z0-9]+\.ts$/u);
+    const eager = builder.validateEagerGraph(metadata);
+    assert.ok(![...eager.eagerInputs].some((path) => path.endsWith("src/floating-plan-pane.ts")));
+    assert.equal(eager.eagerOutputs.has(floatingChunks[0][0]), false);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -172,7 +180,17 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     initTheme("dark");
     host = createPlanPaneHost();
     const { ui } = mockContext.ctx as { ui: ExtensionUIContext };
-    runner.setUIContext({ ...ui, setWidget: host.setWidget }, "tui");
+    const terminal = host;
+    runner.setUIContext(
+      {
+        ...ui,
+        setWidget: host.setWidget,
+        custom: (factory, options) =>
+          options?.overlay ? terminal.custom(factory, options) : ui.custom(factory, options),
+        onTerminalInput: (listener) => terminal.host.addInputListener(listener),
+      },
+      "tui",
+    );
     await command.handler("start", runner.createCommandContext());
     assert.doesNotMatch(host.render().map(stripTerminalSequences).join("\n"), /│|No completed plan yet/u);
     const complete = runner.getToolDefinition("plan_mode_complete");
@@ -194,10 +212,34 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     assert.equal(dividerColumn(), 56);
     host.send("\u001b[<0;56;4m");
     await runner.emit({ type: "session_shutdown", reason: "reload" });
-    assert.deepEqual(JSON.parse(await readFile(join(agentDir, "pi-plan-mode.json"), "utf8")), {
-      defaultPlanTools: ["read", "mcp__docs__read"],
-      planPaneWidthRatio: 44 / 99,
-    });
+    const settingsPath = join(agentDir, "pi-plan-mode.json");
+    const saved = JSON.parse(await readFile(settingsPath, "utf8"));
+    assert.deepEqual(saved, { defaultPlanTools: ["read", "mcp__docs__read"], planPaneWidthRatio: 44 / 99 });
+
+    await writeFile(settingsPath, JSON.stringify({ ...saved, planPane: "floating" }));
+    await runner.emit({ type: "session_start", reason: "reload" });
+    await command.handler("start", runner.createCommandContext());
+    await complete.execute(
+      "complete-floating-plan",
+      { plan: "# Floating generated plan\n\nGenerated lazy preview." },
+      signal,
+      undefined,
+      runner.createToolContext("complete-floating-plan", signal),
+    );
+    await vi.waitFor(
+      () => assert.match(terminal.render().map(stripTerminalSequences).join("\n"), /Generated lazy preview/u),
+      { timeout: 1_000 },
+    );
+    const overlay = terminal.overlays.at(-1);
+    assert.ok(overlay);
+    assert.ok(overlay.getBounds());
+    assert.equal(terminal.host.getFocusedComponent(), terminal.editor);
+    terminal.send("\x1b[21~");
+    assert.equal(overlay.isFocused(), true);
+    terminal.send("\x03");
+    assert.equal(terminal.host.getFocusedComponent(), terminal.editor);
+    await runner.emit({ type: "session_shutdown", reason: "quit" });
+    assert.equal(terminal.closes, 1);
     assert.deepEqual(errors, []);
   } finally {
     try {

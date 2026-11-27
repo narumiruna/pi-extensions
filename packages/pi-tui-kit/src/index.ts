@@ -49,6 +49,12 @@ export {
   type EditorStatusWidgetState,
 } from "./editor-status-widget.js";
 export {
+  type FloatingBounds,
+  FloatingFrame,
+  type FloatingFrameOptions,
+  type FloatingViewport,
+} from "./floating-frame.js";
+export {
   createFramedSettingsMouseRouter,
   type FramedSettingsMouseLayout,
   type FramedSettingsMouseRouter,

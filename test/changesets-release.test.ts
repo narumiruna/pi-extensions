@@ -167,6 +167,11 @@ for (const { label, packageNames, minorConsumers } of [
   },
   { label: "fullscreen handoff", packageNames: ["pi-tui-kit", "pi-starship", "pi-btw"], minorConsumers: [] },
   {
+    label: "floating frame",
+    packageNames: ["pi-tui-kit", "pi-btw", "pi-plan-mode"],
+    minorConsumers: ["@narumitw/pi-plan-mode"],
+  },
+  {
     label: "named collapsible editor widgets",
     packageNames: [
       "pi-tui-kit",

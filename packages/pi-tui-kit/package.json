@@ -54,6 +54,10 @@
       "types": "./dist/editor-status-widget.d.ts",
       "import": "./dist/editor-status-widget.js"
     },
+    "./floating-frame": {
+      "types": "./dist/floating-frame.d.ts",
+      "import": "./dist/floating-frame.js"
+    },
     "./fullscreen-handoff": {
       "types": "./dist/fullscreen-handoff.d.ts",
       "import": "./dist/fullscreen-handoff.js"

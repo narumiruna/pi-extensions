@@ -175,8 +175,7 @@ export async function showPlanModeSettings(
                       {
                         id: "planPane",
                         label: "Plan pane",
-                        description:
-                          "Show the draft or completed plan on the right or left in fullscreen, or turn it off.",
+                        description: "Show the plan in a fullscreen split or floating preview, or turn it off.",
                         currentValue: configuredPlanPane(state.settings),
                         values: PLAN_PANE_PLACEMENTS,
                         action: "set-pane" as const,

@@ -12,8 +12,8 @@ import {
   type TUI,
   type TuiMouseEvent,
   type TuiMouseEventResult,
-  truncateToWidth,
 } from "@earendil-works/pi-tui";
+import { FloatingFrame } from "@narumitw/pi-tui-kit/floating-frame";
 import {
   type BtwKeybindingOverrides,
   BtwPasteGuard,
@@ -27,7 +27,6 @@ import {
 import { formatKeyLabel } from "./text.js";
 
 export type FloatingPage = Component & { dispose?(): void; getPrimaryScrollView?(): ScrollView };
-type Rectangle = { col: number; row: number; width: number; height: number };
 const MIN_WIDTH = 32;
 const MIN_HEIGHT = 9;
 const PAGE_RESERVED_APP_ROWS = 3;
@@ -52,10 +51,8 @@ export class BtwFloatingFrame implements Component, Focusable {
   readonly tui: TUI;
   readonly overlayOptions: OverlayOptions;
   private page: FloatingPage | undefined;
-  private preferred: Rectangle | undefined;
-  private drag: { start: Rectangle; x: number; y: number; resize: boolean } | undefined;
+  private readonly frame: FloatingFrame;
   private adjusting = false;
-  private isFocused = false;
   private readonly pasteGuard = new BtwPasteGuard();
   private readonly shortcutBlockers: string[];
   private readonly directionBlockers: string[];
@@ -63,30 +60,39 @@ export class BtwFloatingFrame implements Component, Focusable {
 
   constructor(
     private readonly parent: TUI,
-    private readonly theme: Theme,
+    theme: Theme,
     private readonly keybindings: KeybindingsManager,
     private readonly hardCancel: () => void,
     overrides?: BtwKeybindingOverrides,
   ) {
-    const frame = this;
-    this.overlayOptions = {
-      get col() {
-        return frame.bounds.col;
+    const frame = new FloatingFrame({
+      getTerminalSize: () => parent.terminal,
+      initialBounds: ({ columns, rows }) => {
+        const width = Math.min(columns, Math.max(MIN_WIDTH, Math.floor(columns * 0.7)));
+        const height = Math.min(rows, Math.max(MIN_HEIGHT, Math.floor(rows * 0.7)));
+        return { width, height, col: Math.floor((columns - width) / 2), row: Math.floor((rows - height) / 2) };
       },
-      get row() {
-        return frame.bounds.row;
+      minSize: { columns: MIN_WIDTH, rows: MIN_HEIGHT },
+      requestRender: () => parent.requestRender(),
+      styleBorder: (line) => theme.fg("border", line),
+      styleTitle: (line) => theme.fg("muted", line),
+      title: () => this.renderTitle(),
+      focusOnDrag: true,
+      body: {
+        render: ({ columns }) => this.page?.render(columns) ?? [theme.fg("muted", "Opening BTW…")],
+        invalidate: () => this.page?.invalidate(),
+        setFocused: (value) => {
+          if (this.page && isFocusable(this.page)) this.page.focused = value && !this.adjusting;
+        },
+        handleMouse: (event) => this.handleBodyMouse(event),
       },
-      get width() {
-        return frame.bounds.width;
-      },
-      get maxHeight() {
-        return frame.bounds.height;
-      },
-    };
+    });
+    this.frame = frame;
+    this.overlayOptions = frame.overlayOptions;
     const terminal = new Proxy(parent.terminal, {
       get(target, property) {
-        if (property === "columns") return frame.bodyWidth;
-        if (property === "rows") return frame.bodyHeight + PAGE_RESERVED_APP_ROWS;
+        if (property === "columns") return frame.viewport.columns;
+        if (property === "rows") return frame.viewport.rows + PAGE_RESERVED_APP_ROWS;
         return boundProperty(target, property);
       },
     });
@@ -113,37 +119,28 @@ export class BtwFloatingFrame implements Component, Focusable {
   }
 
   get focused(): boolean {
-    return this.isFocused;
+    return this.frame.focused;
   }
   set focused(value: boolean) {
-    this.isFocused = value;
-    if (this.page && isFocusable(this.page)) this.page.focused = value && !this.adjusting;
+    this.frame.focused = value;
   }
 
   setPage(page: FloatingPage | undefined): void {
     if (this.page && isFocusable(this.page)) this.page.focused = false;
     this.page = page;
-    this.focused = this.isFocused;
+    this.focused = this.frame.focused;
     this.parent.requestRender();
   }
 
   invalidate(): void {
-    this.page?.invalidate();
+    this.frame.invalidate();
   }
 
   render(width: number): string[] {
-    const { height } = this.bounds;
-    if (width <= 0 || height <= 0) return [];
-    const framed = width >= 3 && height >= 3;
-    const innerWidth = framed ? width - 2 : width;
-    const innerHeight = framed ? height - 2 : height;
-    const content = this.page?.render(innerWidth) ?? [this.theme.fg("muted", "Opening BTW…")];
-    const border = (s: string) => this.theme.fg("border", s);
-    const rows = Array.from({ length: innerHeight }, (_, row) => {
-      const line = truncateToWidth(content[row] ?? "", innerWidth, "", true);
-      return framed ? border("│") + line + border("│") : line;
-    });
-    if (!framed) return rows;
+    return this.frame.render(width);
+  }
+
+  private renderTitle(): string {
     const { key, directions } = this.windowKeys;
     const hint =
       this.adjusting && directions
@@ -151,12 +148,7 @@ export class BtwFloatingFrame implements Component, Focusable {
         : key
           ? `${formatKeyLabel(key)} move/resize`
           : "";
-    const label = truncateToWidth(hint ? ` BTW · ${hint} ` : " BTW ", innerWidth, "", true);
-    return [
-      border("╭") + this.theme.fg("muted", label) + border("╮"),
-      ...rows,
-      border(`╰${"─".repeat(innerWidth - 1)}◢╯`),
-    ];
+    return hint ? ` BTW · ${hint} ` : " BTW ";
   }
 
   handleInput(data: string): void {
@@ -184,7 +176,8 @@ export class BtwFloatingFrame implements Component, Focusable {
         const resize = matchesKey(data, `shift+${direction}`);
         const delta = DELTAS[index];
         if (delta && (resize || matchesKey(data, direction))) {
-          this.adjust(this.bounds, delta[0], delta[1], resize);
+          if (resize) this.frame.resize(delta[0], delta[1]);
+          else this.frame.move(delta[0], delta[1]);
           return;
         }
       }
@@ -194,30 +187,11 @@ export class BtwFloatingFrame implements Component, Focusable {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (this.drag && (event.type === "drag" || event.type === "release")) {
-      const { start, x, y, resize } = this.drag;
-      this.adjust(start, event.screenX - x, event.screenY - y, resize);
-      if (event.type === "release") this.drag = undefined;
-      return { handled: true };
-    }
-    const framed = event.width >= 3 && event.height >= 3;
-    if (event.type === "press" && event.button === "left") {
-      this.drag = undefined;
-      const resize = framed && event.x >= event.width - 2 && event.y === event.height - 1;
-      if (resize || (framed && event.y === 0)) {
-        this.drag = { start: this.bounds, x: event.screenX, y: event.screenY, resize };
-        return { capture: true, focus: true };
-      }
-    }
-    const inset = framed ? 1 : 0;
-    if (event.x < inset || event.y < inset || event.x >= event.width - inset || event.y >= event.height - inset) return;
-    const result = this.page?.handleMouse?.({
-      ...event,
-      x: event.x - inset,
-      y: event.y - inset,
-      width: event.width - inset * 2,
-      height: event.height - inset * 2,
-    });
+    return this.frame.handleMouse(event);
+  }
+
+  private handleBodyMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    const result = this.page?.handleMouse?.(event);
     if (result) return result;
     const scroll = this.page?.getPrimaryScrollView?.();
     if (event.type === "wheel" && scroll && event.wheelDelta) {
@@ -245,46 +219,9 @@ export class BtwFloatingFrame implements Component, Focusable {
 
   private setAdjusting(value: boolean): void {
     this.adjusting = value;
-    this.focused = this.isFocused;
+    this.focused = this.frame.focused;
     this.parent.requestRender();
   }
-
-  private get bodyWidth(): number {
-    const { width, height } = this.bounds;
-    return width >= 3 && height >= 3 ? width - 2 : width;
-  }
-
-  private get bodyHeight(): number {
-    const { width, height } = this.bounds;
-    return width >= 3 && height >= 3 ? height - 2 : height;
-  }
-
-  private get bounds(): Rectangle {
-    const { columns, rows } = this.parent.terminal;
-    const width = Math.min(columns, Math.max(MIN_WIDTH, this.preferred?.width ?? Math.floor(columns * 0.7)));
-    const height = Math.min(rows, Math.max(MIN_HEIGHT, this.preferred?.height ?? Math.floor(rows * 0.7)));
-    const col = clamp(this.preferred?.col ?? Math.floor((columns - width) / 2), 0, columns - width);
-    const row = clamp(this.preferred?.row ?? Math.floor((rows - height) / 2), 0, rows - height);
-    return { col, row, width, height };
-  }
-
-  private adjust(start: Rectangle, dx: number, dy: number, resize: boolean): void {
-    const { columns, rows } = this.parent.terminal;
-    const { col, row, width, height } = start;
-    this.preferred = resize
-      ? {
-          col,
-          row,
-          width: clamp(width + dx, MIN_WIDTH, columns - col),
-          height: clamp(height + dy, MIN_HEIGHT, rows - row),
-        }
-      : { width, height, col: clamp(col + dx, 0, columns - width), row: clamp(row + dy, 0, rows - height) };
-    this.parent.requestRender();
-  }
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }
 
 function boundProperty<T extends object>(target: T, property: string | symbol): unknown {

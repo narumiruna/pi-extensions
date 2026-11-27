@@ -9,6 +9,7 @@ import {
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";
+import type { FloatingPlanPane, FloatingReadingPosition } from "./floating-plan-pane.js";
 import {
   canOpenFullscreenPlanLayout,
   type MountedPlanLayout,
@@ -16,10 +17,10 @@ import {
   type PlanPaneSide,
 } from "./fullscreen-plan-layout.js";
 import type { DraftPreview } from "./plan-draft.js";
-import { DEFAULT_PLAN_PANE_WIDTH_RATIO } from "./settings.js";
+import { DEFAULT_PLAN_PANE_WIDTH_RATIO, type PlanPanePlacement } from "./settings.js";
 
 type PlanPaneContent = string | DraftPreview | undefined;
-type PaneDocument = { raw: string; text: string; completed: boolean };
+export type PaneDocument = { raw: string; text: string; completed: boolean };
 
 function paneDocument(content: PlanPaneContent): PaneDocument | undefined {
   const completed = typeof content === "string";
@@ -34,21 +35,66 @@ const WIDGET_KEY = "plan-mode.pane";
 interface PaneBinding {
   session: ExtensionContext["sessionManager"];
   ui: ExtensionContext["ui"];
-  side: PlanPaneSide;
   document: PaneDocument;
+}
+
+interface SplitBinding extends PaneBinding {
+  placement: PlanPaneSide;
   widthRatio: number;
   onResize: ((ratio: number) => void) | undefined;
   widget?: PlanPaneWidget;
 }
 
+interface FloatingBinding extends PaneBinding {
+  placement: "floating";
+  pending?: object;
+  view?: FloatingPlanPane;
+}
+
 export function createPlanPaneController() {
-  let binding: PaneBinding | undefined;
+  let binding: SplitBinding | FloatingBinding | undefined;
   let hidden = false;
+  let reading: FloatingReadingPosition = { top: 0 };
+  let questions = new Set<object>();
+  let planModeShortcut: string | undefined;
+
+  function reconcileFloating(owner: FloatingBinding) {
+    if (hidden || questions.size > 0) {
+      closeFloating(owner);
+      return;
+    }
+    if (owner.view?.disposed) closeFloating(owner);
+    if (owner.pending || owner.view) return;
+    const pending = {};
+    owner.pending = pending;
+    void import("./floating-plan-pane.js")
+      .then(({ createFloatingPlanPane }) => {
+        if (binding !== owner || owner.pending !== pending) return;
+        owner.pending = undefined;
+        owner.view = createFloatingPlanPane(owner.ui, owner.document, reading, () => planModeShortcut);
+        owner.view.open();
+      })
+      .catch(() => {
+        if (owner.pending === pending) owner.pending = undefined;
+      });
+  }
+
+  function closeFloating(owner: FloatingBinding) {
+    owner.pending = undefined;
+    if (!owner.view) return;
+    const view = owner.view;
+    owner.view = undefined;
+    reading = view.close();
+  }
 
   function clear() {
     const previous = binding;
     binding = undefined;
     if (!previous) return;
+    if (previous.placement === "floating") {
+      closeFloating(previous);
+      return;
+    }
     previous.widget?.dispose();
     try {
       previous.ui.setWidget(WIDGET_KEY, undefined);
@@ -57,26 +103,57 @@ export function createPlanPaneController() {
     }
   }
 
+  function toggleFloating(owner: FloatingBinding) {
+    hidden = !hidden;
+    reconcileFloating(owner);
+    reading.top = 0;
+  }
+
   return {
     reset() {
-      hidden = false;
       clear();
+      hidden = false;
+      reading = { top: 0 };
+      questions = new Set();
+    },
+    pauseForQuestion() {
+      const activeQuestions = questions;
+      const token = {};
+      activeQuestions.add(token);
+      if (binding?.placement === "floating") reconcileFloating(binding);
+      return () => {
+        if (questions !== activeQuestions || !activeQuestions.delete(token)) return;
+        if (binding?.placement === "floating") reconcileFloating(binding);
+      };
     },
     toggle(session: ExtensionContext["sessionManager"]) {
-      if (binding?.session !== session || !binding.widget) return;
-      if (binding.widget.setHidden(!hidden)) hidden = !hidden;
+      if (binding?.session !== session) return;
+      if (binding.placement === "floating") {
+        if (questions.size === 0) toggleFloating(binding);
+      } else if (binding.widget?.setHidden(!hidden)) hidden = !hidden;
+    },
+    handleInput(session: ExtensionContext["sessionManager"], data: string, canToggle: boolean) {
+      if (binding?.session !== session || binding.placement !== "floating") return false;
+      const owner = binding;
+      return owner.view?.handleInput(data, canToggle, () => toggleFloating(owner)) === true;
+    },
+    setPlanModeShortcut(shortcut: string | undefined) {
+      planModeShortcut = shortcut;
     },
     showsCompletedPlan(session: ExtensionContext["sessionManager"], plan: string) {
-      return binding?.session === session && binding.widget?.showsCompletedPlan(plan) === true;
+      if (binding?.session !== session || hidden) return false;
+      return binding.placement === "floating"
+        ? binding.view?.showsCompletedPlan(plan) === true
+        : binding.widget?.showsCompletedPlan(plan) === true;
     },
     update(
       ctx: ExtensionContext,
-      placement: PlanPaneSide | "off",
+      placement: PlanPanePlacement,
       plan: PlanPaneContent,
       widthRatio = DEFAULT_PLAN_PANE_WIDTH_RATIO,
       onResize?: (ratio: number) => void,
     ) {
-      if (ctx.mode !== "tui" || !ctx.hasUI || placement === "off" || typeof tuiCore.ScrollView !== "function") {
+      if (ctx.mode !== "tui" || !ctx.hasUI || placement === "off") {
         clear();
         return;
       }
@@ -85,10 +162,26 @@ export function createPlanPaneController() {
         clear();
         return;
       }
+      if (placement === "floating") {
+        if (binding?.session === ctx.sessionManager && binding.ui === ctx.ui && binding.placement === "floating") {
+          binding.document = document;
+          binding.view?.setDocument(document);
+          reconcileFloating(binding);
+          return;
+        }
+        clear();
+        binding = { session: ctx.sessionManager, ui: ctx.ui, placement, document };
+        reconcileFloating(binding);
+        return;
+      }
+      if (typeof tuiCore.ScrollView !== "function") {
+        clear();
+        return;
+      }
       if (
         binding?.session === ctx.sessionManager &&
         binding.ui === ctx.ui &&
-        binding.side === placement &&
+        binding.placement === placement &&
         !binding.widget?.disposed
       ) {
         binding.document = document;
@@ -99,10 +192,10 @@ export function createPlanPaneController() {
         return;
       }
       clear();
-      const owner: PaneBinding = {
+      const owner: SplitBinding = {
         session: ctx.sessionManager,
         ui: ctx.ui,
-        side: placement,
+        placement,
         document,
         widthRatio,
         onResize,
@@ -115,7 +208,7 @@ export function createPlanPaneController() {
           owner.widget = new PlanPaneWidget(
             tui,
             theme,
-            owner.side,
+            owner.placement,
             owner.document,
             hidden,
             owner.widthRatio,

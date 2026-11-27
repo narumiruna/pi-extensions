@@ -42,17 +42,27 @@ The shortcut is disabled when `toggleShortcut` is omitted.
 
 ### Plan pane
 
-`planPane` accepts `right` (default), `left`, or `off`. Saves from **Plan pane** take effect immediately, including during an active Plan workflow. Valid edits to the watched user file also take effect; an invalid update does not replace the active settings.
+`planPane` accepts `right` (default), `left`, `floating`, or `off`. Saves from **Plan pane** take effect immediately, including during an active Plan workflow. Valid edits to the watched user file also take effect; an invalid update does not replace the active settings.
 
-The pane opens on a compatible Pi fullscreen layout without taking keyboard focus, and only when the managed draft or completed snapshot has content to show. Missing, blank, or unreadable drafts do not open a pane; existing tool errors still appear in the conversation. Read-only workflows only show completed plans. The pane closes when Plan mode ends, including when you save the plan for later or start implementation. Regular, RPC, print, and JSON modes do not display the pane.
+The pane opens without taking keyboard focus when a managed draft or completed plan has content. Missing, blank, or unreadable drafts do not open a pane. Existing tool errors still appear in the conversation. Read-only workflows only show completed plans. The pane closes when you end Plan mode, save the plan for later, or start implementation. RPC, print, and JSON modes do not display a pane.
 
-From the main editor, press **F4** to hide or reopen the pane when there is content and the layout has room (at least 80 columns and 12 rows). Close any focused questionnaire or menu before using it. Hiding lasts across draft edits, completion, resizing, and placement changes, but resets when you start a new workflow, switch sessions or branches, or run `/reload`. Reopening uses the configured side and last saved width, and starts at the top. The shortcut never overrides `off` or writes to the settings file.
+Press **F4** from the main editor to hide or reopen the pane. Hiding lasts across draft edits, completion, resizing, and placement changes. It resets when you start a new workflow, switch sessions or branches, or run `/reload`. Reopening starts at the top. The shortcut never overrides `off` or writes settings. If F4 already has an effective Pi binding or is the loaded **Plan mode shortcut**, Plan mode does not register it. See `/hotkeys` for registered shortcuts. A custom editor must forward Pi extension shortcuts to support F4.
 
-The pane starts at half the terminal width after reserving one column for the divider. Drag the divider with the left mouse button and release it to save the new width. The pane keeps at least 24 columns and the conversation at least 48. Resizing the terminal can limit or hide the pane but never changes the saved width.
+#### Split pane (`right` or `left`)
 
-The optional `planPaneWidthRatio` in the user settings file stores a number greater than `0` and less than `1`, shared across both sides, projects, sessions, and restarts that use the same Pi agent directory. Set it manually (for example, `0.4` for 40%) or remove it to restore the default of `0.5`. Valid edits to the watched file apply without restarting Pi. A failed drag save restores the last confirmed width.
+The split pane needs a compatible Pi fullscreen layout at least 80 columns wide and 12 rows high. By default, it uses half the width after reserving one column for the divider. The pane keeps at least 24 columns and the conversation at least 48. Drag the divider with the left mouse button and release it to save the new width without taking keyboard focus.
 
-Plan mode does not register the pane shortcut if F4 is already assigned to an effective Pi keybinding or the loaded **Plan mode shortcut**. See `/hotkeys` for the registered binding. A custom editor must forward Pi extension shortcuts to support F4.
+The optional `planPaneWidthRatio` stores a number greater than `0` and less than `1`, shared across both sides, projects, sessions, and restarts that use the same Pi agent directory. Set it manually (for example, `0.4` for 40%) or remove it to restore the default of `0.5`. Valid edits to the watched file apply without restarting Pi. A failed drag save restores the last confirmed width. Terminal resizing does not change the saved width.
+
+#### Floating preview (`floating`)
+
+The floating preview works in regular and fullscreen TUI. It starts near the top right and needs at least 28 columns and 10 rows. Its bounds leave four bottom screen rows clear, but it can overlap an editor that extends into the preview area. Focus stays in the main editor unless you explicitly enter adjustment. The preview waits while a Plan questionnaire is open.
+
+- In fullscreen, drag the title to move the preview or its lower-right grip to resize it. Scroll inside the preview with the mouse wheel. These actions do not take keyboard focus.
+- In either renderer, press the displayed **F10**, **F11**, or **F12** shortcut from the main editor to enter adjustment. Arrow keys move, **Shift+arrow** keys resize, and **Page Up** and **Page Down** scroll. **Escape**, **Ctrl+C**, or Pi's configured interrupt key returns to the main editor without ending Plan mode.
+- Adjustment uses the first of F10–F12 not assigned to an effective Pi binding in that mode or to the loaded **Plan mode shortcut**. Fullscreen search runs before preview keys. A search remap can take priority over those keys; if it uses Ctrl+C, adjustment is unavailable in fullscreen. Other extensions may also handle input before Plan mode.
+
+Press **F4** to close the floating preview, including during adjustment. Reopen it to reuse its last position and size for the current workflow. Geometry never uses `planPaneWidthRatio` and is not saved to disk. If Pi refuses to change renderer while an overlay is open, hide the preview before switching modes.
 
 ### Plan helper tools
 

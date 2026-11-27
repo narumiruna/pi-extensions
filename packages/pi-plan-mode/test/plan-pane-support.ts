@@ -1,17 +1,19 @@
-import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   Container,
-  Editor,
+  type Editor,
   type EditorTheme,
+  getKeybindings,
+  type OverlayHandle,
   ScrollView,
-  type Terminal,
   Text,
   type TUI,
   TuiAltScreen,
   TuiMainScreen,
   VStack,
 } from "@earendil-works/pi-tui";
+import { FullscreenTerminal } from "@narumitw/pi-tui-kit/testing";
 
 export const PANE_KEY = "plan-mode.pane";
 type Widget = Component & { dispose?(): void };
@@ -20,34 +22,9 @@ export function createPlanPaneHost<E extends Editor = Editor>(
   mode: TUI["mode"] = "fullscreen",
   createEditor?: (tui: TUI, theme: EditorTheme) => E,
 ) {
-  let columns = 100;
-  let rows = 18;
-  let input: (data: string) => void = () => {};
-  const noop = () => {};
-  const terminal: Terminal = {
-    get columns() {
-      return columns;
-    },
-    get rows() {
-      return rows;
-    },
-    kittyProtocolActive: false,
-    start(onInput) {
-      input = onInput;
-    },
-    stop: noop,
-    drainInput: async () => {},
-    write: noop,
-    moveBy: noop,
-    hideCursor: noop,
-    showCursor: noop,
-    clearLine: noop,
-    clearFromCursor: noop,
-    clearScreen: noop,
-    setTitle: noop,
-    setProgress: noop,
-    setProgramStatus: noop,
-  };
+  const terminal = new FullscreenTerminal();
+  terminal.columns = 100;
+  terminal.rows = 18;
   const makeRenderer = (mode: TUI["mode"]) =>
     mode === "fullscreen" ? new TuiAltScreen(terminal) : new TuiMainScreen(terminal);
   let host = makeRenderer(mode);
@@ -73,7 +50,14 @@ export function createPlanPaneHost<E extends Editor = Editor>(
       noMatch: (text) => text,
     },
   };
-  const editor = createEditor?.(tui, editorTheme) ?? (new Editor(tui, editorTheme) as E);
+  const keybindings = () => getKeybindings() as ConstructorParameters<typeof CustomEditor>[2];
+  const makeEditor = () => {
+    const component =
+      createEditor?.(tui, editorTheme) ?? (new CustomEditor(tui, editorTheme, keybindings()) as Editor as E);
+    component.onSubmit ??= () => {};
+    return component;
+  };
+  let editor = makeEditor();
   editor.setText("main draft");
   const editorContainer = new Container();
   editorContainer.addChild(editor);
@@ -103,15 +87,86 @@ export function createPlanPaneHost<E extends Editor = Editor>(
     if (widget) widgetsAbove.addChild(widget);
     host.requestRender();
   };
+  const overlays: OverlayHandle[] = [];
+  const cleanups = new Set<() => void>();
+  let nextFactory: Promise<void> | undefined;
+  let closes = 0;
+  const custom: ExtensionContext["ui"]["custom"] = async (factory, options) => {
+    const gate = nextFactory;
+    nextFactory = undefined;
+    return new Promise((resolve, reject) => {
+      let component: Widget | undefined;
+      let handle: OverlayHandle | undefined;
+      let finished = false;
+      const unmount = () => {
+        if (!cleanups.delete(unmount)) return;
+        if (handle) handle.hide();
+        else if (component && editorContainer.children.includes(component)) {
+          editorContainer.clear();
+          editorContainer.addChild(editor);
+          host.setFocus(editor);
+        }
+        component?.dispose?.();
+      };
+      const start = async () => {
+        if (gate) await gate;
+        component = await factory(tui, theme, keybindings(), (result) => {
+          if (finished) return;
+          finished = true;
+          if (options?.overlay) closes++;
+          unmount();
+          resolve(result);
+        });
+        if (finished) return;
+        cleanups.add(unmount);
+        if (options?.overlay) {
+          const { overlayOptions } = options;
+          handle = host.showOverlay(
+            component,
+            typeof overlayOptions === "function" ? overlayOptions() : overlayOptions,
+          );
+          overlays.push(handle);
+          options.onHandle?.(handle);
+        } else {
+          editorContainer.clear();
+          editorContainer.addChild(component);
+          host.setFocus(component);
+          host.requestRender();
+        }
+      };
+      void start().catch(reject);
+    });
+  };
   return {
     appendToTranscript(component: Component) {
       document.addChild(component);
       host.requestRender();
     },
-    editor,
+    get editor() {
+      return editor;
+    },
     transcript,
     root,
     setWidget,
+    custom,
+    overlays,
+    get closes() {
+      return closes;
+    },
+    delayNextFactory(until: Promise<void>) {
+      nextFactory = until;
+    },
+    resetCustomUi() {
+      for (const cleanup of cleanups) cleanup();
+    },
+    replaceEditor() {
+      const text = editor.getExpandedText();
+      editorContainer.clear();
+      editor = makeEditor();
+      editor.setText(text);
+      editorContainer.addChild(editor);
+      host.setFocus(editor);
+    },
     get host() {
       return host;
     },
@@ -133,18 +188,21 @@ export function createPlanPaneHost<E extends Editor = Editor>(
     },
     render() {
       host.renderNow();
-      return host instanceof TuiAltScreen ? host.getScreenLines() : [];
+      return host instanceof TuiAltScreen
+        ? host.getScreenLines()
+        : host.captureRenderState().previousLines.slice(-terminal.rows);
     },
     resize(width: number, height: number) {
-      columns = width;
-      rows = height;
+      terminal.columns = width;
+      terminal.rows = height;
       host.requestRender();
     },
     send(data: string) {
-      input(data);
+      terminal.input(data);
       host.renderNow();
     },
     stop() {
+      for (const cleanup of cleanups) cleanup();
       widget?.dispose?.();
       host.stop();
     },

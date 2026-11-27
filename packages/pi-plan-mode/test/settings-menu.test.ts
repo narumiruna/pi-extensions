@@ -190,7 +190,7 @@ test("Plan pane settings cycle and keep the previous placement on save failure",
       assert.equal(saved.length, 0);
       assert.match(tui.render().join("\n"), /Plan pane\s+right/u);
       assert.match(notifications.at(-1)?.message ?? "", /Could not save/u);
-      for (const planPane of ["left", "off", "right"]) {
+      for (const planPane of ["left", "floating", "off", "right"]) {
         tui.press("tui.select.confirm");
         await tui.waitForPending();
         await tui.waitForOpen();

@@ -16,7 +16,44 @@ export function paneShortcutAvailable(bindings: Record<string, unknown>, planMod
   );
 }
 
-export function createPlanPaneShortcut(pi: ExtensionAPI, toggle: (ctx: ExtensionContext) => void) {
+export function floatingAdjustmentKey(
+  bindings: Record<string, unknown>,
+  mode: "regular" | "fullscreen",
+  planModeShortcut?: string,
+) {
+  const reserved = [
+    ...Object.entries(bindings)
+      .filter(([name]) => mode === "fullscreen" || !name.startsWith("tui.altScreen."))
+      .flatMap(([, value]) => (Array.isArray(value) ? value : [value])),
+    planModeShortcut,
+  ];
+  const nativeSearch = bindings["tui.altScreen.search"];
+  if (
+    mode === "fullscreen" &&
+    (Array.isArray(nativeSearch) ? nativeSearch : [nativeSearch]).some(
+      (key) =>
+        typeof key === "string" &&
+        ["\x03", "\x1b[99;5u", "\x1b[27;5;99~"].some((data) => matchesKey(data, key as KeyId)),
+    )
+  ) {
+    return;
+  }
+  return (
+    [
+      ["f10", "21"],
+      ["f11", "23"],
+      ["f12", "24"],
+    ] as const
+  ).find(
+    ([, code]) => !reserved.some((key) => typeof key === "string" && matchesKey(`\x1b[${code}~`, key as KeyId)),
+  )?.[0];
+}
+
+export function createPlanPaneShortcut(
+  pi: ExtensionAPI,
+  toggle: (ctx: ExtensionContext) => void,
+  adjust: (ctx: ExtensionContext, data: string, canToggle: boolean) => boolean,
+) {
   let registered: boolean | undefined;
   let input: { session: ExtensionContext["sessionManager"]; allowed: boolean; remove(): void } | undefined;
 
@@ -39,18 +76,19 @@ export function createPlanPaneShortcut(pi: ExtensionAPI, toggle: (ctx: Extension
         }
         if (registered) {
           pi.registerShortcut(KEY, {
-            description: "Hide or show the Plan pane in fullscreen",
+            description: "Hide or show the Plan pane",
             handler: (shortcutCtx) => {
               if (input?.session === shortcutCtx.sessionManager && input.allowed) toggle(shortcutCtx);
             },
           });
         }
       }
-      if (!registered) return;
       const permitsInput = createInteractionInputGuard();
       const owner = { session: ctx.sessionManager, allowed: false, remove: () => {} };
       owner.remove = ctx.ui.onTerminalInput((data) => {
+        if (input !== owner) return;
         owner.allowed = permitsInput(data);
+        if (owner.allowed && adjust(ctx, data, registered === true)) return { consume: true };
       });
       input = owner;
     },

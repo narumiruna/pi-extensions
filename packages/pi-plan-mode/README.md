@@ -212,7 +212,7 @@ If an extension overrides a built-in tool with the same name, Pi exposes the eff
 A complete Plan mode answer should appear only after the agent has resolved discoverable facts and high-impact user decisions.
 In an eligible workflow, the agent maintains the Markdown draft with Pi's native `write`, `edit`, and `read`, then calls `plan_mode_complete({})` alone. The tool validates the file and stores its full contents as a session snapshot. `/plan show`, save, export, and implementation use that snapshot, not the live draft. See [managed Markdown drafts](./docs/command-workflows.md#managed-markdown-drafts) for eligibility, storage, and limits.
 Read-only workflows still call `plan_mode_complete({ plan })` with the complete Markdown. Neither workflow accepts empty or whitespace-only plans or plans longer than 50,000 JavaScript characters.
-When the fullscreen Plan pane shows the completed plan, the live tool result shows a short confirmation instead of repeating the Markdown. If the pane is hidden or unavailable, the full result appears in the conversation. `/plan show`, exports, and non-interactive tool results still include the full plan.
+When the Plan pane shows the completed plan, the live tool result shows a short confirmation instead of repeating the Markdown. If the pane is hidden or unavailable, the full result appears in the conversation. `/plan show`, exports, and non-interactive tool results still include the full plan.
 
 `plan_mode_complete` uses Pi's `terminate: true` hint.
 Managed-draft workflows reject nested or batched completion. In read-only workflows, termination is best effort for parallel batches, so the prompt still requires the call to be standalone and last.
@@ -402,7 +402,7 @@ By default, Plan mode inherits thinking, allows active safe built-ins, uses the 
 The existing Plan-mode toggle shortcut (`toggleShortcut`) is disabled unless configured; enabling, changing, or removing it takes effect after `/reload` or restarting Pi.
 Until then, that shortcut binding stays unchanged.
 This setting is unrelated to the conditional F2 questionnaire/discussion toggle and does not configure it.
-In the terminal UI, choose **Plan pane** to move the read-only fullscreen pane left or right, or turn it off. The default is right, and changes apply immediately.
+In the terminal UI, choose **Plan pane** to use a fullscreen split on the right (default) or left, a read-only **floating** preview in regular or fullscreen TUI, or no pane. Changes apply immediately.
 Workflow defaults apply to later workflows; an active implementation keeps its captured reinjection policy.
 The export destination affects the next export immediately.
 Inactive built-in `grep`, `find`, and `ls` must be [enabled in Pi settings](./docs/settings.md#enable-inactive-built-in-search-tools-in-pi); Plan policy only grants execution permission.
@@ -419,11 +419,7 @@ Read the [settings reference](./docs/settings.md) for all accepted values, tool-
 
 ## 🚧 Limitations
 
-The Plan pane opens only when a Markdown draft or completed plan has content to show. Read-only workflows open it after completion. Press **F4** from the main editor to hide or reopen it on the configured side while the layout has room. Hiding lasts for the current Plan workflow and does not change **Plan pane** in Settings. See [Plan pane settings](docs/settings.md#plan-pane) for shortcut conflicts and limits. Use the mouse wheel over the pane to scroll it without scrolling the conversation.
-
-The pane starts at 50% of the available width, with at least 24 columns for the pane and 48 for the conversation. Drag the divider with the left mouse button to resize without moving keyboard focus. Pi saves the new width as a proportion when you release the divider and reuses it on either side, including after restart.
-
-The pane hides below 80 columns or 12 rows. Narrow terminals may limit the displayed width without changing the saved proportion. It is not available in regular mode or on incompatible fullscreen layouts; Plan mode never switches renderer modes for you. Use `/plan show` to read the completed plan in the conversation without a mouse or a pane.
+The Plan pane only opens when there is draft or completed content to show. Press **F4** from the main editor to hide or reopen it for the current workflow. The floating preview leaves keyboard focus in the main editor. Use the shortcut shown in its title to adjust or scroll it with the keyboard. Fullscreen also supports mouse dragging and scrolling. See [Plan pane settings](docs/settings.md#plan-pane) for keyboard controls, terminal size limits, and what stays saved. Use `/plan show` to read the completed plan without a pane.
 
 Plan mode skips unchanged session-state writes, including idle shutdown, while preserving branch-local workflow changes.
 This does not coordinate concurrent writers: do not open the same persisted session in multiple Pi processes.
