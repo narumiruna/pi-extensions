@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   diff,
   doctor,
@@ -13,11 +12,9 @@ import {
   syncBoth,
 } from "@narumitw/pi-sync-daemon/engine/sync/sync-operations";
 import { test } from "vitest";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { createMockContext } from "../../../test/support.js";
 import type { CommandOptions } from "../src/commands/command-types.js";
 import { localConfigPath } from "../src/settings/config-file.js";
-import syncExtension from "../src/sync.js";
-import { runRegisteredCommand } from "./daemon-test-helpers.js";
 import { withTempHome } from "./helpers.js";
 import { MockWebDavServer } from "./mock-webdav-server.js";
 
@@ -75,15 +72,9 @@ test("all backend-neutral sync routes operate against a WebDAV target", async ()
       assert.equal(readFileSync(path.join(agentDir, "settings.json"), "utf8"), '{"theme":"dark"}\n');
       await syncBoth(ctx, options());
       await rollback(ctx, options([pointer.snapshot]));
-      const mock = createMockPi();
-      syncExtension(mock.pi);
-      await runRegisteredCommand(mock, ctx as ExtensionCommandContext, "config");
-      const configOutput = notifications.at(-1)?.message ?? "";
-      assert.match(configOutput, /kind: webdav/);
-      assert.match(configOutput, /password: configured/);
-      assert.match(configOutput, /url: http:\/\/127\.0\.0\.1:\d+\/…/u);
-      assert.doesNotMatch(configOutput, /endpoint:|bucket:|password: pass/);
-      assert.match(notifications.map((item) => item.message).join("\n"), /WebDAV|webdav|snapshot/i);
+      const output = notifications.map((item) => item.message).join("\n");
+      assert.match(output, /WebDAV|snapshot/iu);
+      assert.doesNotMatch(output, /password: pass/u);
     });
   } finally {
     await server.close();

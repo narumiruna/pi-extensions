@@ -116,7 +116,8 @@ test("real Pi RPC rejects retired commands without repairing contact or accessin
   try {
     const storageFrom = fixture.storage.requests.length;
     await checkedCommand("/sync status --setup home", "/sync status was retired. Use /sync diff");
-    await checkedCommand("/sync doctor", "/sync doctor was retired. Use /sync config");
+    await checkedCommand("/sync doctor", "/sync doctor was retired. Open /sync → Settings");
+    await checkedCommand("/sync config --setup home", "/sync config was retired. Open /sync → Settings");
     const wire = (await daemon.inspect()).slice(before);
     assert.ok(
       wire.every(({ method }) => !["attach", "update", "submit", "resume-contact"].includes(method)),

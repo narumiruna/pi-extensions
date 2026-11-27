@@ -19,10 +19,10 @@ export function syncErrorGuidance(error: unknown): string {
     next = "Check local disk availability and other processes using the private settings file, then retry.";
   } else if (/\bagent directory exceeds the scan entry bound\b/iu.test(message)) {
     next =
-      "Reduce the number of entries Pi Sync must scan before retrying. Exclude whole subdirectories to skip their contents. Use /sync config to review the active scope.";
+      "Reduce the number of entries Pi Sync must scan before retrying. Exclude whole subdirectories to skip their contents. Open /sync → Settings to review the active scope.";
   } else if (/\bprojected agent directory exceeds the (64 MiB scan byte|scan file) bound\b/iu.test(message)) {
     next =
-      "The resulting files would exceed the sync limit. Review the current scope with /sync config and reduce the local or incoming sync content before retrying.";
+      "The resulting files would exceed the sync limit. Review the scope in /sync → Settings and reduce the local or incoming sync content before retrying.";
   } else if (/\bagent directory exceeds the (64 MiB scan byte|scan file) bound\b/iu.test(message)) {
     next =
       "Reduce the files managed by this setup before retrying. Edit Agent directory scope in /sync → Settings to exclude paths you do not need.";
@@ -42,7 +42,7 @@ export function syncErrorGuidance(error: unknown): string {
     next = "Check your storage provider's service status, then use /sync diff to review differences before retrying.";
   } else if (/timed out|timeout|request failed|resolve host|Could not resolve|ENOTFOUND|ECONNREFUSED/iu.test(message)) {
     next =
-      "Check the server address and network connection for the affected setup. Use /sync config to review settings.";
+      "Check the server address and network connection. To review the connection settings, open /sync → Settings → Manage storage connections.";
   } else if (/strong ETag|If-Match|If-None-Match|precondition|conditional header/iu.test(message)) {
     next =
       "Ask your provider to check strong ETags and conditional writes, including proxy behavior, or choose compatible storage. Do not bypass these safety checks.";
@@ -55,7 +55,7 @@ export function syncErrorGuidance(error: unknown): string {
     next =
       "Correct the named field or item in /sync. If the settings file is invalid, repair it before retrying; do not replace it with defaults.";
   } else {
-    next = "Use /sync config to review setup settings, and /sync diff to review file differences before retrying.";
+    next = "Review the setup in /sync → Settings and use /sync diff to review file differences before retrying.";
   }
   return `${message}\n${next}`;
 }

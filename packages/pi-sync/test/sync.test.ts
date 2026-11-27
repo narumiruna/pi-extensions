@@ -44,8 +44,12 @@ test("sync command catalog and usage document setup-addressing routes", () => {
   assert.ok(SYNC_COMMANDS.some((command) => command.name === "use"));
   assert.match(usage(), /use <setup>/u);
   assert.match(usage(), /Version 1 and version 2 settings are unsupported/u);
-  assert.doesNotMatch(usage(), /`profiles`|`targets`|--target|\/sync (status|doctor)|\bdoctor\b/u);
+  assert.doesNotMatch(
+    usage(),
+    /`profiles`|`targets`|--target|\/sync (status|doctor|config)|^Commands:.*\b(?:doctor|config)\b/mu,
+  );
   assert.match(usage(), /\/sync daemon status/u);
+  assert.match(usage(), /\/sync → Settings/u);
   const readme = readFileSync(`${process.cwd()}/packages/pi-sync/README.md`, "utf8");
   for (const command of SYNC_COMMANDS) {
     assert.match(readme, new RegExp(`\\/sync ${command.name}\\b`, "u"));
@@ -82,7 +86,7 @@ test("argument completion retains prior tokens and completes known setup names",
     completeSyncArguments("daemon st")?.map(({ value }) => value),
     ["daemon status"],
   );
-  for (const retired of ["status", "doctor"]) {
+  for (const retired of ["status", "doctor", "config"]) {
     assert.ok(!completeSyncArguments("")?.some((item) => item.value === retired));
     for (const suffix of ["", " ", " --s", " --setup ", " --setup w"]) {
       assert.equal(completeSyncArguments(`${retired}${suffix}`), null);
@@ -169,12 +173,14 @@ test.each(["tui", "rpc"] as const)(
     assert.ok(command);
     await command.handler(" status --setup work", ctx);
     await command.handler("doctor --yes", ctx);
+    await command.handler("config --setup work", ctx);
     assert.deepEqual(
       notifications.map(({ level }) => level),
-      ["warning", "warning"],
+      ["warning", "warning", "warning"],
     );
     assert.match(notifications[0]?.message ?? "", /\/sync status was retired.*\/sync diff.*Debug mode/u);
-    assert.match(notifications[1]?.message ?? "", /\/sync doctor was retired.*\/sync config.*History/u);
+    assert.match(notifications[1]?.message ?? "", /\/sync doctor was retired.*\/sync → Settings.*History/u);
+    assert.match(notifications[2]?.message ?? "", /\/sync config was retired.*\/sync → Settings/u);
   },
 );
 
@@ -184,7 +190,7 @@ test.each(["print", "json"] as const)("%s rejects before relying on no-op UI out
   const { ctx, notifications } = createMockContext({ hasUI: false, mode });
   const command = mock.commands.get("sync");
   assert.ok(command);
-  for (const route of ["help", "status", "doctor", "daemon status"]) {
+  for (const route of ["help", "status", "doctor", "config", "daemon status"]) {
     await assert.rejects(async () => command.handler(route, ctx), /requires TUI or RPC mode/u);
   }
   assert.deepEqual(notifications, []);

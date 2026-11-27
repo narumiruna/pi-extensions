@@ -293,7 +293,7 @@ Enable it only after reviewing the destination and selected content because file
 
 ### Diagnostics
 
-Use `/sync config` to review setup settings. Use **View differences** to compare files without transferring them, or ask Pi to use the [Debug tool](#ask-pi-to-explain-a-check) for a baseline-relative check. Neither read proves that storage accepts writes. Push keeps its existing safety checks, including temporary conditional-write probes on WebDAV and S3/R2.
+Use **/sync → Settings** to review sync setups and storage connections. Use **View differences** to compare files without transferring them, or ask Pi to use the [Debug tool](#ask-pi-to-explain-a-check) for a baseline-relative check. Neither read proves that storage accepts writes. Push keeps its existing safety checks, including temporary conditional-write probes on WebDAV and S3/R2.
 
 If a WebDAV publication activated a snapshot but left its entry missing, open **/sync → History** and select **Repair active snapshot history** when offered. The confirmation names the setup, destination, and snapshot. After approval, Pi Sync runs an isolated conditional-write probe and cleans it up, then adds the missing entry if it is still needed and safe. The active snapshot and local files stay unchanged. This action is separate from diagnostics and is never automatic.
 
@@ -890,7 +890,7 @@ Recovery:
 1. retain the old file byte-for-byte;
 2. move it aside manually;
 3. create a new version 3 document or run the setup manager;
-4. review the exact storage path with `/sync config`, inspect file differences with `/sync diff`, and review the first pull or push;
+4. review **Storage location** in **/sync → Settings**, inspect file differences with `/sync diff`, and review the first pull or push;
 5. restore the retained file and a compatible older package only if rolling back.
 
 If your processes reject a newer settings version, keep the document and use compatible Pi Sync and daemon builds. In particular, [clearing transfer size limits](#transfer-size-limits) never downgrades version 9. Do not use the recovery steps above to replace a newer document.

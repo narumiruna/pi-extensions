@@ -319,7 +319,6 @@ Use `/sync` for initial setup, masked credential entry, and operations that requ
 | `/sync daemon recover` | Diagnostic fallback: review and stop the current daemon in TUI or RPC without starting a replacement or retrying a transfer. |
 | `/sync use <setup>` | Switch the active local sync setup, following its switch policy. |
 | `/sync init` | Create a local configuration template. |
-| `/sync config` | Show resolved configuration. |
 | `/sync files` | Open the current setup’s path selection or agent-directory rules in TUI. |
 | `/sync diff` | Read current local and remote file differences without transferring files. |
 | `/sync conflicts` | Review private unresolved dependency groups and choose local or remote group versions after fresh validation. |
@@ -361,7 +360,7 @@ Review [Settings](#-settings) for included-content privacy and [Manager, conflic
 
 ### Migrating from the retired check commands
 
-**Breaking change:** `/sync status`, `/sync doctor`, and their **Check remote status** and **Diagnostics** menu actions are gone. Entering the old commands shows migration advice without contacting storage. Use **View differences** or `/sync diff` to compare files, `/sync config` to review setup settings, and the Debug tool below for baseline-relative checks. A read does not verify write access. For a missing WebDAV history entry, open **History** and review **Repair active snapshot history**. `/sync daemon status` still reports service status. Supported daemon peers retain their existing `status` and `doctor` operations; no settings conversion is required.
+**Breaking change:** `/sync status`, `/sync doctor`, `/sync config`, and the **Check remote status** and **Diagnostics** menu actions are gone. Entering the old commands shows migration advice without contacting storage. Use **/sync → Settings** to review sync setups and storage connections, **View differences** or `/sync diff` to compare files, and the Debug tool below for baseline-relative checks. A read does not verify write access. For a missing WebDAV history entry, open **History** and review **Repair active snapshot history**. `/sync daemon status` still reports service status. Supported daemon peers retain their existing `status` and `doctor` operations; no settings conversion is required.
 
 ## 🛠️ Tools
 

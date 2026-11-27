@@ -10,7 +10,6 @@ export const SYNC_COMMANDS = [
   { name: "help", description: "Show command usage" },
   { name: "use", description: "Switch the current sync setup", usageSuffix: " <setup>" },
   { name: "init", description: "Create local config template" },
-  { name: "config", description: "Show resolved configuration" },
   { name: "files", description: "Choose included content" },
   { name: "diff", description: "Show local/remote diff" },
   { name: "conflicts", description: "Review private unresolved conflict groups" },
@@ -46,7 +45,6 @@ const SETUP_FLAG_COMPLETION = {
   description: "Address a sync setup without switching",
 } as const;
 const SYNC_FLAG_COMPLETIONS: Record<string, readonly CommandArgumentCompletion[]> = {
-  config: [SETUP_FLAG_COMPLETION],
   files: [SETUP_FLAG_COMPLETION],
   diff: [SETUP_FLAG_COMPLETION],
   conflicts: [SETUP_FLAG_COMPLETION],
@@ -117,7 +115,10 @@ export function retiredSyncCommandGuidance(command: string | undefined): string 
     return "/sync status was retired. Use /sync diff to view file differences, or ask Pi to recheck the current setup in Debug mode.";
   }
   if (command === "doctor") {
-    return "/sync doctor was retired. Use /sync config to review settings, /sync diff to check file differences, or /sync → History for WebDAV history recovery.";
+    return "/sync doctor was retired. Open /sync → Settings to review the setup, use /sync diff to check file differences, or open /sync → History for WebDAV history recovery.";
+  }
+  if (command === "config") {
+    return "/sync config was retired. Open /sync → Settings to review sync setups and storage connections.";
   }
   return undefined;
 }
@@ -263,6 +264,6 @@ export function usage() {
     "Automatic transfer at startup is a separate opt-in: one conflict-free established-baseline transfer at idle in TUI/RPC, with conditional/lease publication and no resource reload.",
     "Autonomous sync and Continuous sync are retired. Saved flags no longer transfer files or call a model. Use Sync now to review a transfer or enable Startup transfer for one eligible startup sync.",
     "New after-exit grants are not supported. Use /sync daemon revoke-after-exit to clear a retained grant.",
-    "Settings: use /sync init or edit storage connections and sync setups in ~/.pi/agent/pi-sync.json (or the configured Pi agent directory). Version 1 and version 2 settings are unsupported and are never rewritten.",
+    "Settings: open /sync → Settings to review sync setups and storage connections. Use /sync init or edit pi-sync.json in the Pi agent directory for manual setup. Version 1 and version 2 settings are unsupported and are never rewritten.",
   ].join("\n");
 }

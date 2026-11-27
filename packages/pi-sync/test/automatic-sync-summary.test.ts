@@ -20,7 +20,7 @@ for (const agentMode of [false, true])
     withTempHome(async (agentDir) => {
       await fs.mkdir(agentDir, { recursive: true });
       const settings = v3S3Settings();
-      Object.assign(settings.syncSetups.home.sync, { agentMode, continuous: true, mergeSettings: true });
+      Object.assign(settings.syncSetups.home.sync, { agentMode, continuous: true });
       Object.assign(settings.syncSetups, {
         work: {
           ...settings.syncSetups.home,
@@ -48,7 +48,6 @@ for (const agentMode of [false, true])
           return false;
         },
       });
-      await executeCommand("config", context.ctx, undefined, createSyncLoaders({}));
       await executeCommand("help", context.ctx, undefined, createSyncLoaders({}));
       const switched = await showSetupSwitcher(context.ctx, async () => undefined, "work");
       await showSyncSetups(context.ctx, {
@@ -57,7 +56,6 @@ for (const agentMode of [false, true])
         makeCurrent: async () => undefined,
         remove: async () => undefined,
       });
-      const config = context.notifications.find((entry) => entry.message.startsWith("pi-sync config:"))?.message ?? "";
       const help = context.notifications.find((entry) => entry.message.startsWith("Usage:"))?.message ?? "";
       const detail = frames.find((frame) => frame.includes("Sync setup “home”")) ?? "";
       for (const review of [detail, switchReview]) {
@@ -66,13 +64,9 @@ for (const agentMode of [false, true])
       }
       assert.doesNotMatch(manager.title, /Auto-apply:|Background sync:|Scheduler|Automatic requests|Accounting:/u);
       assert.ok(!manager.actions.includes("Retry refused model result…"));
-      assert.match(config, /Autonomous sync and Continuous sync are retired/u);
-      assert.match(config, /^settings field merge: On$/m);
+      assert.match(help, /Autonomous sync and Continuous sync are retired/u);
       assert.match(help, /Use Sync now to review a transfer or enable Startup transfer/u);
-      assert.doesNotMatch(
-        [manager.title, config, help, detail, switchReview].join("\n"),
-        /experimental|agent[ -]mode/i,
-      );
+      assert.doesNotMatch([manager.title, help, detail, switchReview].join("\n"), /experimental|agent[ -]mode/i);
       assert.equal(switched, false);
       assert.equal(customCalls, 0);
       assert.equal(await fs.readFile(localConfigPath(), "utf8"), before);
@@ -105,7 +99,7 @@ for (const automatic of [false, true]) {
     });
   }
   for (const sessions of [false, true]) {
-    test(`automatic=${automatic} sessions=${sessions}: manager, config, and switch disclose shutdown scope`, async () => {
+    test(`automatic=${automatic} sessions=${sessions}: manager and switch disclose shutdown scope`, async () => {
       await withTempHome(async (agentDir) => {
         await fs.mkdir(agentDir, { recursive: true });
         const settings = v3S3Settings({
@@ -135,8 +129,6 @@ for (const automatic of [false, true]) {
             return false;
           },
         });
-        await executeCommand("config", context.ctx, undefined, createSyncLoaders({}));
-        assert.ok(context.notifications.some((n) => n.message.includes(`automatic sync: ${expected}`)));
         assert.equal(
           await showSetupSwitcher(
             context.ctx,
