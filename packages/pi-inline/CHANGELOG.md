@@ -1,5 +1,11 @@
 # @narumitw/pi-inline
 
+## 0.6.2
+
+### Patch Changes
+
+- 4736102: Use fragment-free `file://` click URLs for styled local Markdown links and linked badges with anchors and no query. Keep source-line anchors for hover previews. Opening the file depends on the terminal and does not jump to the anchor.
+
 ## 0.6.1
 
 ### Patch Changes
