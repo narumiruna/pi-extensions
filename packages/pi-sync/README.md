@@ -350,7 +350,7 @@ All routes support TUI and RPC; RPC settings and included-content screens are re
 Print and JSON modes reject `/sync`.
 Unknown commands or flags, trailing values, and missing setup/snapshot values are rejected, including the former version 2 setup-addressing flag.
 
-- `--setup <name>` targets a setup without switching it on `config`, `files`, `diff`, `conflicts`, `push`, `pull`, `sync`, `history`, and `rollback`.
+- `--setup <name>` targets a setup without switching it on `files`, `diff`, `conflicts`, `push`, `pull`, `sync`, `history`, and `rollback`.
 - `--yes` (alias: `-y`) skips confirmation on `push`, `pull`, `sync`, `rollback`, and `migrate-state`; use only after reviewing the affected content.
 - `--force` lets `push` or `pull` accept content conflicts without disabling backend concurrency protection. It is also accepted by `sync`, which still requires a direction choice for divergent content, and by `rollback` for compatibility. For legacy path policies, explicit forced directions can also resolve an interrupted merge after a fresh review, archiving its old journal instead of restoring old bytes.
 - `--stale` is accepted only by `unlock` and is required to remove a stale lock.
