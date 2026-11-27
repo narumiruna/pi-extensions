@@ -12,7 +12,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
-import { type ActiveGoal, loadGoalStateFromSession } from "../src/persistence.js";
+import { type ActiveGoal, loadGoalStateFromSession, serializeBoundedGoalState } from "../src/persistence.js";
 
 const goal: ActiveGoal = {
   id: "goal-id",
@@ -141,7 +141,9 @@ test("reopening a compact branch through Pi appends a full checkpoint for rollba
     manager.appendMessage({ role: "user", content: "Start the report", timestamp: 1 });
     const sourceId = manager.appendCustomEntry("goal-state", { goal });
     const current = { ...goal, tokensUsed: 42, timeUsedSeconds: 22, automaticModelTurns: 4 };
-    const compactId = manager.appendCustomEntry("goal-state", compact(current, sourceId));
+    const checkpoint = serializeBoundedGoalState(current, manager);
+    assert.deepEqual(checkpoint, compact(current, sourceId));
+    const compactId = manager.appendCustomEntry("goal-state", checkpoint);
     const file = manager.getSessionFile();
     assert.ok(file);
     const fork = SessionManager.open(file).createBranchedSession(compactId);

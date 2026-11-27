@@ -213,8 +213,10 @@ Live quota reset, accounting delay, entitlement behavior, and provider-console a
 
 ## Compaction persistence
 
-Canonical Goal state is stored in `goal-state` session entries. Every new checkpoint of a Goal stores
-its full objective in `goal.text`. A clear writes `{ goal: null }`.
+Canonical Goal state is stored in `goal-state` session entries. The runtime still writes the full
+objective in `goal.text` for every checkpoint. A clear writes `{ goal: null }`. The bounded serializer
+is tested but is not connected to the runtime. Enable it only in a separate release after verifying
+the published reader-only package.
 
 The reader also accepts a checkpoint that omits `goal.text` and names a full snapshot of the same
 Goal in `objectiveEntryId`. A full snapshot uses its own `goal.text` even if it has a reference

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted as the design for a follow-up. The writer is not implemented or released.
+Accepted. The bounded serializer is implemented and tested, but the package runtime still writes full snapshots. Connecting the serializer to the runtime requires the published reader-only package.
 
 ## Context
 
@@ -133,4 +133,6 @@ flowchart LR
 2. Test the exact 64-entry boundary, edits, clears, forks, missing or cyclic parents, and the full-snapshot fallback. Restore each selected checkpoint with Pi's package loader and check the objective, status, and accounting.
 3. Verify rollback with the published reader-only tarball. Test checkpoints on both sides of a full-snapshot refresh, including a compact branch tip from an abruptly stopped session.
 
-The Lean model verifies the lookup bound, the encoded-size guard, and restore on a valid branch. It does not verify the TypeScript implementation, Pi's parent lookup behavior, JSON serialization, or elapsed time. Those checks remain release prerequisites.
+The staged writer tests replay 450 checkpoints with a 2,000-byte objective and measure actual JSONL bytes. In one run, the file was 83.5% smaller without interleaved entries and 72.7% smaller with two interleaved entries per checkpoint. Both runs used at most 64 history lookups per write. The built reader-only package restores a staged compact fixture and still appends a full snapshot.
+
+The Lean model verifies the lookup bound, the encoded-size guard, and restore on a valid branch. It does not establish runtime latency or compatibility with a published reader tarball. Check those before enabling the writer.
