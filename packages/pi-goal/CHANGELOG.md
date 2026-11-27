@@ -1,5 +1,11 @@
 # @narumitw/pi-goal
 
+## 0.55.7
+
+### Patch Changes
+
+- 0f16fc4: Reject compact Goal checkpoints that depend on duplicate entry IDs or out-of-order parents in a session file. Full checkpoints are unchanged.
+
 ## 0.55.6
 
 ### Patch Changes
