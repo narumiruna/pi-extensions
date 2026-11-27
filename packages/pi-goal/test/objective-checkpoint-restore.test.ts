@@ -93,6 +93,45 @@ test("invalid compact references do not restore an older Goal", () => {
   }
 });
 
+const referenceBarriers = [
+  { name: "a legacy queue", metadata: { queue: [] } },
+  { name: "an invalid queue", metadata: { queue: null } },
+  { name: "a pending priority", metadata: { pendingAction: { kind: "prioritize", objective: "Next objective" } } },
+  {
+    name: "a pending advance",
+    metadata: { pendingAction: { kind: "advance", goalId: goal.id, reason: "complete", completedText: goal.text } },
+  },
+  { name: "an invalid pending action", metadata: { pendingAction: { kind: "unknown" } } },
+  { name: "a queued Goal", status: "queued" },
+  { name: "a completed Goal", status: "complete" },
+];
+const barrierPositions = ["source", "intervening checkpoint", "compact tip"] as const;
+
+test.each(referenceBarriers.flatMap((barrier) => barrierPositions.map((position) => ({ ...barrier, position }))))(
+  "the compact reader rejects $name at the $position",
+  ({ metadata, status, position }) => {
+    const source = entry("source", null, { goal });
+    const badSource = { ...source, data: { ...metadata, goal: { ...goal, status: status ?? goal.status } } };
+    const active: ActiveGoal = { ...goal, status: "active", tokensUsed: 42 };
+    const good = compact(active, source.id);
+    const bad = entry("bad", source.id, {
+      ...good,
+      ...metadata,
+      goal: { ...good.goal, status: status ?? goal.status },
+    });
+    const cases = {
+      source: [badSource, entry("leaf", source.id, good)],
+      "intervening checkpoint": [source, bad, entry("leaf", bad.id, good)],
+      "compact tip": [source, bad],
+    };
+
+    const entries = cases[position];
+    for (const sessionManager of [{ getBranch: () => entries }, { getEntries: () => entries }]) {
+      assert.deepEqual(loadGoalStateFromSession({ sessionManager }), { goal: undefined, legacyQueueState: undefined });
+    }
+  },
+);
+
 test("without getBranch the reader rejects siblings, ambiguous parents, and invalid parent order", () => {
   const root = { id: "root", parentId: null, type: "message" };
   const source = entry("source", root.id, { goal });

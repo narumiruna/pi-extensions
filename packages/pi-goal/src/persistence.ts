@@ -84,7 +84,13 @@ export function serializeBoundedGoalState(
   history?: Partial<CheckpointHistory>,
 ): GoalStateEntryData | CompactGoalStateEntryData {
   const full = serializeGoalState(goal);
-  if (!full.goal || !canWalkHistory(history) || !isStoredGoal(full.goal) || !hasPersistableNumbers(full.goal)) {
+  if (
+    !full.goal ||
+    full.goal.status === "complete" ||
+    !canWalkHistory(history) ||
+    !isStoredGoal(full.goal) ||
+    !hasPersistableNumbers(full.goal)
+  ) {
     return full;
   }
   const objectiveEntryId = findObjectiveEntryId(full.goal, history);
@@ -108,14 +114,13 @@ function findObjectiveEntryId(goal: ActiveGoal, history: CheckpointHistory): str
     seen.add(id);
     if (parentId && seen.has(parentId)) return undefined;
     if (isCanonicalEntry(entry)) {
-      const data = entry.data;
-      if (!isRecord(data) || Object.hasOwn(data, "queue") || Object.hasOwn(data, "pendingAction")) return undefined;
-      const stored = data.goal;
-      if (!isRecord(stored) || stored.status === "queued" || !hasPersistableNumbers(stored)) return undefined;
-      if ((sourceId === undefined || id === sourceId) && Object.hasOwn(stored, "text") && isStoredGoal(stored)) {
-        return stored.id === goal.id && stored.text === goal.text ? id : undefined;
+      const checkpoint = referenceCheckpoint(entry.data);
+      if (!checkpoint || !hasPersistableNumbers(checkpoint.goal)) return undefined;
+      if (sourceId === undefined || id === sourceId) {
+        const full = fullReferenceSource(checkpoint.goal);
+        if (full) return full.id === goal.id && full.text === goal.text ? id : undefined;
       }
-      const link = compactCheckpoint(data);
+      const link = compactCheckpoint(checkpoint);
       if (!link || link.goal.id !== goal.id || (sourceId !== undefined && link.objectiveEntryId !== sourceId)) {
         return undefined;
       }
@@ -164,17 +169,29 @@ function isCanonicalEntry(entry: SessionEntry): boolean {
 function resolveCheckpointObjective(data: unknown, getLineage: () => readonly SessionEntry[]): unknown {
   if (!isRecord(data) || !Object.hasOwn(data, "objectiveEntryId")) return data;
   if (isRecord(data.goal) && Object.hasOwn(data.goal, "text")) return data;
-  const checkpoint = compactCheckpoint(data);
+  const checkpoint = compactCheckpoint(referenceCheckpoint(data));
   if (!checkpoint) return undefined;
   const text = referencedObjective(getLineage(), checkpoint.objectiveEntryId, checkpoint.goal.id);
   return text === undefined ? undefined : { ...data, goal: { ...checkpoint.goal, text } };
 }
 
-function compactCheckpoint(data: unknown) {
-  if (!isRecord(data) || typeof data.objectiveEntryId !== "string" || !data.objectiveEntryId) return undefined;
+function referenceCheckpoint(data: unknown) {
+  if (!isRecord(data) || Object.hasOwn(data, "queue") || Object.hasOwn(data, "pendingAction")) return undefined;
   const goal = data.goal;
-  if (!isRecord(goal) || Object.hasOwn(goal, "text") || !hasStoredGoalFields(goal)) return undefined;
+  if (!isRecord(goal) || goal.status === "queued" || goal.status === "complete") return undefined;
   return { goal, objectiveEntryId: data.objectiveEntryId };
+}
+
+function fullReferenceSource(goal: Record<string, unknown> | undefined) {
+  return goal && Object.hasOwn(goal, "text") && isStoredGoal(goal) ? goal : undefined;
+}
+
+function compactCheckpoint(checkpoint: ReturnType<typeof referenceCheckpoint>) {
+  if (!checkpoint) return undefined;
+  const { goal, objectiveEntryId } = checkpoint;
+  if (typeof objectiveEntryId !== "string" || !objectiveEntryId) return undefined;
+  if (Object.hasOwn(goal, "text") || !hasStoredGoalFields(goal)) return undefined;
+  return { goal, objectiveEntryId };
 }
 
 function referencedObjective(lineage: readonly SessionEntry[], sourceId: string, goalId: string): string | undefined {
@@ -185,11 +202,11 @@ function referencedObjective(lineage: readonly SessionEntry[], sourceId: string,
       if (!isCanonicalEntry(entry) || lineage.findIndex((candidate) => candidate.id === sourceId) !== index) {
         return undefined;
       }
-      const source = isRecord(entry.data) ? entry.data.goal : undefined;
-      return isStoredGoal(source) && source.id === goalId ? source.text : undefined;
+      const source = fullReferenceSource(referenceCheckpoint(entry.data)?.goal);
+      return source?.id === goalId ? source.text : undefined;
     }
     if (!isCanonicalEntry(entry)) continue;
-    const checkpoint = compactCheckpoint(entry.data);
+    const checkpoint = compactCheckpoint(referenceCheckpoint(entry.data));
     if (checkpoint?.objectiveEntryId !== sourceId || checkpoint.goal.id !== goalId) return undefined;
   }
   return undefined;

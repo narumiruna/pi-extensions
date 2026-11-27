@@ -128,6 +128,15 @@ test("an unavailable history or clear keeps the original format without reading 
   assert.deepEqual(serializeBoundedGoalState(undefined, history), { goal: null });
 });
 
+test("a completed checkpoint stays full without reading the branch", () => {
+  const completed: ActiveGoal = { ...goal, status: "complete" };
+  const history = {
+    getLeafEntry: () => assert.fail("completion cannot use a reference"),
+    getEntry: () => assert.fail("completion cannot use a reference"),
+  };
+  assert.deepEqual(serializeBoundedGoalState(completed, history), { goal: completed });
+});
+
 test("the writer falls back at missing, cyclic, malformed, or unrelated sources", () => {
   const source = row("source", null, { goal });
   const reference = row("reference", source.id, compact(goal, source.id));
@@ -146,6 +155,12 @@ test("the writer falls back at missing, cyclic, malformed, or unrelated sources"
     "source is a compact checkpoint": [{ ...source, data: compact(goal, "earlier") }, reference],
     "reference crosses a different source": [source, otherLink, { ...reference, parentId: otherLink.id }],
     "legacy queue metadata": [{ ...source, data: { goal, queue: [] } }, reference],
+    "completed source": [{ ...source, data: { goal: { ...goal, status: "complete" } } }, reference],
+    "compact link crosses completion": [
+      source,
+      row("complete", source.id, compact({ ...goal, status: "complete" }, source.id)),
+      { ...reference, parentId: "complete" },
+    ],
     "nonfinite source that would not survive JSON encoding": [
       { ...source, data: { goal: { ...goal, tokensUsed: Infinity } } },
       reference,
