@@ -222,8 +222,9 @@ The reader also accepts a checkpoint that omits `goal.text` and names a full sna
 unfinished Goal in `objectiveEntryId`. A full snapshot uses its own `goal.text` even if it has a
 reference field. The source and checkpoint must be on the same branch. Every Goal checkpoint
 between them must refer to the same source and Goal. A clear, completion, or legacy queue state
-ends the reference chain. An unresolved reference restores no Goal; it does not fall back to an
-older checkpoint.
+ends the reference chain. Each entry from the active leaf through the source must have a unique
+ID in the session. A parent that appears after its child in the session also invalidates the
+reference. An unresolved reference restores no Goal; it does not fall back to an older checkpoint.
 
 Older versions cannot read reference checkpoints. Before switching to one, use a version that
 reads references and writes full snapshots to reopen the session on the branch you need or to fork

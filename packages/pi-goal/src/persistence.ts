@@ -147,12 +147,16 @@ function hasPersistableNumbers(goal: unknown): boolean {
 }
 
 export function loadGoalStateFromSession(ctx: SessionContext): LoadedGoalState {
-  const branch = ctx.sessionManager?.getBranch?.();
-  const entries = branch ?? ctx.sessionManager?.getEntries?.() ?? [];
+  const manager = ctx.sessionManager;
+  const branch = manager?.getBranch?.();
+  const entries = branch ?? manager?.getEntries?.() ?? [];
   const canonicalEntry = entries.findLast(isCanonicalEntry);
   if (canonicalEntry) {
+    const leaf = branch?.at(-1) ?? canonicalEntry;
     return loadCanonicalGoalState(
-      resolveCheckpointObjective(canonicalEntry.data, () => branch ?? ancestorsOf(entries, canonicalEntry)),
+      resolveCheckpointObjective(canonicalEntry.data, leaf.id, () =>
+        branch ? (manager?.getEntries?.() ?? branch) : entries,
+      ),
     );
   }
 
@@ -166,12 +170,16 @@ function isCanonicalEntry(entry: SessionEntry): boolean {
   return entry.type === "custom" && entry.customType === GOAL_STATE_ENTRY_TYPE;
 }
 
-function resolveCheckpointObjective(data: unknown, getLineage: () => readonly SessionEntry[]): unknown {
+function resolveCheckpointObjective(
+  data: unknown,
+  leafId: string | undefined,
+  getRawEntries: () => readonly SessionEntry[],
+): unknown {
   if (!isRecord(data) || !Object.hasOwn(data, "objectiveEntryId")) return data;
   if (isRecord(data.goal) && Object.hasOwn(data.goal, "text")) return data;
   const checkpoint = compactCheckpoint(referenceCheckpoint(data));
-  if (!checkpoint) return undefined;
-  const text = referencedObjective(getLineage(), checkpoint.objectiveEntryId, checkpoint.goal.id);
+  if (!checkpoint || !leafId) return undefined;
+  const text = referencedObjective(getRawEntries(), leafId, checkpoint.objectiveEntryId, checkpoint.goal.id);
   return text === undefined ? undefined : { ...data, goal: { ...checkpoint.goal, text } };
 }
 
@@ -194,41 +202,36 @@ function compactCheckpoint(checkpoint: ReturnType<typeof referenceCheckpoint>) {
   return { goal, objectiveEntryId };
 }
 
-function referencedObjective(lineage: readonly SessionEntry[], sourceId: string, goalId: string): string | undefined {
-  for (let index = lineage.length - 1; index >= 0; index -= 1) {
-    const entry = lineage[index];
-    if (!entry) continue;
-    if (entry.id === sourceId) {
-      if (!isCanonicalEntry(entry) || lineage.findIndex((candidate) => candidate.id === sourceId) !== index) {
-        return undefined;
-      }
-      const source = fullReferenceSource(referenceCheckpoint(entry.data)?.goal);
-      return source?.id === goalId ? source.text : undefined;
-    }
-    if (!isCanonicalEntry(entry)) continue;
-    const checkpoint = compactCheckpoint(referenceCheckpoint(entry.data));
-    if (checkpoint?.objectiveEntryId !== sourceId || checkpoint.goal.id !== goalId) return undefined;
-  }
-  return undefined;
-}
-
-function ancestorsOf(entries: readonly SessionEntry[], leaf: SessionEntry): SessionEntry[] {
+function referencedObjective(
+  entries: readonly SessionEntry[],
+  leafId: string,
+  sourceId: string,
+  goalId: string,
+): string | undefined {
   const indexById = new Map<string, number | null>();
   for (const [index, entry] of entries.entries()) {
-    if (entry.id !== undefined) indexById.set(entry.id, indexById.has(entry.id) ? null : index);
+    if (entry.id) indexById.set(entry.id, indexById.has(entry.id) ? null : index);
   }
-  const lineage: SessionEntry[] = [];
-  for (let index = entries.lastIndexOf(leaf); index >= 0; ) {
+  let text: string | undefined;
+  for (let index = indexById.get(leafId); typeof index === "number"; ) {
     const entry = entries[index];
-    if (!entry) return [];
-    lineage.push(entry);
-    if (typeof entry.parentId !== "string") break;
-    const parent = indexById.get(entry.parentId);
-    if (parent === undefined) break;
-    if (parent === null || parent >= index) return [];
+    if (!entry) return undefined;
+    if (text === undefined) {
+      if (entry.id === sourceId) {
+        if (!isCanonicalEntry(entry)) return undefined;
+        const source = fullReferenceSource(referenceCheckpoint(entry.data)?.goal);
+        if (source?.id !== goalId) return undefined;
+        text = source.text;
+      } else if (isCanonicalEntry(entry)) {
+        const checkpoint = compactCheckpoint(referenceCheckpoint(entry.data));
+        if (checkpoint?.objectiveEntryId !== sourceId || checkpoint.goal.id !== goalId) return undefined;
+      }
+    }
+    const parent = entry.parentId ? indexById.get(entry.parentId) : undefined;
+    if (typeof parent === "number" && parent >= index) return undefined;
     index = parent;
   }
-  return lineage.reverse();
+  return text;
 }
 
 function loadCanonicalGoalState(data: unknown): LoadedGoalState {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
@@ -146,18 +146,93 @@ test("without getBranch the reader rejects siblings, ambiguous parents, and inva
       { id: "late", parentId: source.id, type: "message" },
     ],
     "parent cycle": [root, { ...source, parentId: leaf.id }, leaf],
+    "parent cycle through an older ancestor": [
+      root,
+      { id: "older", parentId: leaf.id, type: "message" },
+      { ...source, parentId: "older" },
+      leaf,
+    ],
   };
   for (const [name, entries] of Object.entries(cases)) {
     assert.equal(loadGoalStateFromSession({ sessionManager: { getEntries: () => entries } }).goal, undefined, name);
   }
 });
 
+function onDiskReferencePaths() {
+  function note(id: string, parentId: string | null) {
+    return { ...entry(id, parentId, {}), customType: "notes" };
+  }
+  const root = note("root", null);
+  const source = entry("source", root.id, { goal });
+  const tip = entry("tip", source.id, compact({ ...goal, status: "active" }, source.id));
+  const sibling = note("sibling", root.id);
+  const clear = entry("clear", source.id, { goal: null });
+  const laterClear = entry("later-clear", tip.id, { goal: null });
+  const tail = note("tail", tip.id);
+  return {
+    "rejects a source ID duplicated on a sibling": {
+      entries: [
+        root,
+        source,
+        sibling,
+        { ...source, parentId: sibling.id, data: { goal: { ...goal, text: "Sibling" } } },
+        tip,
+      ],
+      expected: undefined,
+    },
+    "rejects an intervening ID that hides a clear": {
+      entries: [root, source, clear, note(clear.id, source.id), { ...tip, parentId: clear.id }],
+      expected: undefined,
+    },
+    "rejects a duplicated checkpoint ID": {
+      entries: [root, source, { ...tip, data: { goal: null } }, tip],
+      expected: undefined,
+    },
+    "rejects a descendant ID that hides a newer clear": {
+      entries: [root, source, tip, laterClear, note(laterClear.id, tip.id)],
+      expected: undefined,
+    },
+    "rejects a parent record written after its child": {
+      entries: [root, { ...tip, parentId: "late" }, source, note("late", source.id), tail],
+      expected: undefined,
+    },
+    "ignores duplicate IDs outside the required path": {
+      entries: [root, root, sibling, sibling, source, tip, tail],
+      expected: goal.text,
+    },
+  };
+}
+
+test.each(Object.entries(onDiskReferencePaths()))(
+  "reading a session file %s",
+  async (_label, { entries, expected }) => {
+    const root = await mkdtemp(join(tmpdir(), "pi-goal-reference-path-"));
+    try {
+      const manager = SessionManager.create(root, root);
+      const file = manager.getSessionFile();
+      const header = manager.getHeader();
+      assert.ok(file && header);
+      const records = [header, ...entries.map((row) => ({ ...row, timestamp: header.timestamp }))];
+      await writeFile(file, `${records.map((row) => JSON.stringify(row)).join("\n")}\n`);
+      const restored = loadGoalStateFromSession({ sessionManager: SessionManager.open(file) });
+      assert.equal(restored.goal?.text, expected);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
 test("a full checkpoint wins over a stray reference, and compact completion does not restore a Goal", () => {
   const source = entry("source", null, { goal });
   const full = entry("full", source.id, { goal: { ...goal, text: "New objective" }, objectiveEntryId: "missing" });
   const complete = entry("complete", source.id, compact({ ...goal, status: "complete" }, source.id));
   assert.equal(
-    loadGoalStateFromSession({ sessionManager: { getBranch: () => [source, full] } }).goal?.text,
+    loadGoalStateFromSession({
+      sessionManager: {
+        getBranch: () => [source, full],
+        getEntries: () => assert.fail("full snapshots do not read raw history"),
+      },
+    }).goal?.text,
     "New objective",
   );
   const reference = entry("reference", full.id, compact({ ...goal, tokensUsed: 42 }, full.id));
