@@ -6,7 +6,7 @@ import {
   CONTROL_ENTRY_TYPE,
   createCaptureState,
   createControlEntry,
-  finalizePendingRequests,
+  finalizeOpenRequest,
   MAX_CAPTURE_AGE_MINUTES,
   MAX_CAPTURE_RECORDS,
   PROVIDER_REQUEST_ENTRY_TYPE,
@@ -67,18 +67,22 @@ export function createDebugExtension(dependencies: Partial<DebugDependencies> = 
       ],
       parameters: Type.Object({
         action: Type.Optional(
-          StringEnum(DIAGNOSTIC_ACTIONS, {
-            description:
-              "status (default), capture controls, latest/show/compare, retention configure, or a full sanitized bundle",
-          }),
+          Type.Unsafe<DiagnosticAction>(
+            StringEnum(DIAGNOSTIC_ACTIONS, {
+              description:
+                "status (default), capture controls, latest/show/compare, retention configure, or a full sanitized bundle",
+            }),
+          ),
         ),
         detail: Type.Optional(
-          StringEnum(DIAGNOSTIC_DETAILS, {
-            description: "summary (default) or full diagnostic detail",
-          }),
+          Type.Unsafe<(typeof DIAGNOSTIC_DETAILS)[number]>(
+            StringEnum(DIAGNOSTIC_DETAILS, {
+              description: "summary (default) or full diagnostic detail",
+            }),
+          ),
         ),
         sections: Type.Optional(
-          Type.Array(StringEnum(DIAGNOSTIC_SECTIONS), {
+          Type.Array(Type.Unsafe<DiagnosticSection>(StringEnum(DIAGNOSTIC_SECTIONS)), {
             uniqueItems: true,
             maxItems: DIAGNOSTIC_SECTIONS.length,
             description: "Optional detail sections to include without requesting the full report",
@@ -225,12 +229,12 @@ export function createDebugExtension(dependencies: Partial<DebugDependencies> = 
       recordRuntime(ctx, "tools_changed", false);
     });
 
-    pi.on("agent_end", () => {
-      finalizePendingRequests(capture);
-    });
+    pi.on("agent_end", () => finalizeOpenRequest(capture));
+    pi.on("session_shutdown", () => finalizeOpenRequest(capture));
 
     pi.on("message_end", (event, ctx) => {
       if (event.message.role !== "assistant") return;
+      finalizeOpenRequest(capture);
       const snapshot = createRuntimeSnapshot(pi, ctx, "assistant_message", now(), {
         provider: event.message.provider,
         model: event.message.model,
@@ -241,35 +245,34 @@ export function createDebugExtension(dependencies: Partial<DebugDependencies> = 
     });
 
     pi.on("before_provider_request", (event, ctx) => {
+      finalizeOpenRequest(capture);
       if (!capture.enabled) return;
-      const diagnostic = extractProviderRequestDiagnostic(event.payload, {
+      const api = ctx.model?.api;
+      const record = extractProviderRequestDiagnostic(event.payload, {
         requestIndex: capture.nextRequestIndex,
         capturedAt: now(),
         sessionId: ctx.sessionManager.getSessionId(),
         provider: ctx.model?.provider,
         model: ctx.model?.id,
-        api: ctx.model?.api,
       });
       capture.nextRequestIndex += 1;
-      capture.records.push(diagnostic);
-      if (diagnostic.responseTelemetry === "pending") {
-        capture.pendingRequestIndexes.push(diagnostic.requestIndex);
-      }
+      capture.records.push(record);
+      capture.openRequest = {
+        record,
+        measureHeaderLatency:
+          api !== undefined && api !== "pi-virtual" && api !== "google-generative-ai" && api !== "google-vertex",
+      };
       pruneCaptureState(capture, now());
-      pi.appendEntry(PROVIDER_REQUEST_ENTRY_TYPE, diagnostic);
+      pi.appendEntry(PROVIDER_REQUEST_ENTRY_TYPE, { ...record });
     });
 
     pi.on("after_provider_response", (event) => {
-      const requestIndex = capture.pendingRequestIndexes[0];
-      if (requestIndex === undefined) return;
-      const request = capture.records.find((record) => record.requestIndex === requestIndex);
-      if (!request) return;
-      const response = createProviderResponseDiagnostic(request, event.status, now());
-      attachProviderResponse(request, response);
+      if (!capture.openRequest) return;
+      const { record, measureHeaderLatency } = capture.openRequest;
+      const response = createProviderResponseDiagnostic(record, event.status, now(), measureHeaderLatency);
+      attachProviderResponse(record, response);
       pi.appendEntry(PROVIDER_RESPONSE_ENTRY_TYPE, response);
-      if (event.status >= 200 && event.status < 300) {
-        capture.pendingRequestIndexes.shift();
-      }
+      if (event.status >= 200 && event.status < 300) finalizeOpenRequest(capture);
     });
 
     function restoreBranchState(ctx: ExtensionContext, reason: "session_start" | "session_tree"): void {

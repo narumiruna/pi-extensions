@@ -10,7 +10,7 @@ The default response is concise, while selected sections and sanitized bundles p
 - Aggregates prompt-cache usage and reports cautious findings when repeated requests have no cache reads.
 - Lists active and inactive tools, lower-bound definition sizes, provenance, and the limitations of Pi's tool-inspection API.
 - Lists visible extension tool and command surfaces with owning package versions when a package manifest is discoverable.
-- Captures provider-visible tool names across installed adapter payload shapes, numeric request sizes, final HTTP status, and response-header latency without retaining payload content.
+- Captures provider-visible tool names, numeric request sizes, the last observed HTTP status, and header latency where available, without retaining payload content.
 - Compares provider requests and runtime snapshots with explicit added, removed, and changed fields.
 - Produces actionable findings and deduplicated recommendations.
 - Audits retained provider fields and bundle source-path redaction before marking a diagnostic bundle shareable.
@@ -78,13 +78,17 @@ The `privacy` section reports the provider-field allowlist and bundle source-red
 
 The `before_provider_request` hook exposes the payload at this extension's handler position, so a later extension can still replace it.
 A captured payload does not prove that the provider accepted or executed the exposed tools.
-Response latency ends when headers arrive and does not measure stream completion.
-The installed `google-generative-ai` and `google-vertex` adapters do not emit response-header telemetry, so their requests are marked `unsupported` rather than `pending`.
-Restored requests without retained response telemetry are marked `unavailable` because a future response cannot complete a historical capture.
+Header latency is estimated from the request and response hooks where available. It does not measure first-token time or stream completion.
+The hooks do not identify the serving adapter when the selected model is virtual or unknown, so those captures omit latency.
+On Pi versions that emit Google HTTP errors, the `google-generative-ai` and `google-vertex` adapters report the error status without headers. They do not report successful HTTP responses.
+A reported 429 followed by a silent successful retry remains the last observed status, not the final outcome. No HTTP 200, `retry-after`, or latency is inferred.
+The report counts requests with an observed status in `completedRequestCount`, regardless of outcome. The latency average uses only measured samples.
+
+Pi exposes no request identifier, so the extension matches responses by event order.
+Retries of the same payload can update its observed status until a reported success, the assistant message ends, a new payload arrives, or the run ends.
+Finished requests with no observed response are marked `unavailable`, including silent Google successes.
+Restored captures with no response cannot take new events; pending records become `unavailable` and historical `unsupported` labels remain readable.
 Retained-window byte totals are `null` when any included request has unknown legacy size data.
-Provider responses are matched to requests by event order because the hook exposes no request identifier.
-Failed HTTP attempts remain associated with the same request until a successful retry replaces them or `agent_end` ends the run.
-Requests without response headers are marked `unavailable` at `agent_end`, and unmatched indexes are discarded so a failed run cannot offset later response attribution.
 Extension visibility includes only public tool and slash-command surfaces, so passive event-only extensions cannot be enumerated.
 Inactive tools include an honest generic explanation because Pi does not expose the configuration, filter, or deferred-loading reason.
 Per-tool definition sizes are lower bounds over the provider-visible name, description, and parameters because `ExtensionAPI.getAllTools()` does not expose `constrainedSampling`.

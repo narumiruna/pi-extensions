@@ -22,13 +22,11 @@ export interface ProviderRequestDiagnostic {
   response: ProviderResponseDiagnostic | null;
 }
 
-export interface ProviderResponseDiagnostic {
-  version: 1;
+export type ProviderResponseDiagnostic = {
   requestIndex: number;
   capturedAt: number;
   status: number;
-  responseHeaderLatencyMs: number;
-}
+} & ({ version: 1; responseHeaderLatencyMs: number } | { version: 2; responseHeaderLatencyMs: null });
 
 export interface ProviderRequestIdentity {
   requestIndex: number;
@@ -36,7 +34,6 @@ export interface ProviderRequestIdentity {
   sessionId: string;
   provider?: string;
   model?: string;
-  api?: string;
 }
 
 export function extractProviderRequestDiagnostic(
@@ -62,7 +59,7 @@ export function extractProviderRequestDiagnostic(
     toolDefinitionBytes: providerToolDefinitionByteLength(root),
     topLevelToolNames: extractProviderToolNames(root),
     transcriptToolNames: extractTranscriptToolNames(root?.input, root?.messages),
-    responseTelemetry: responseTelemetryState(identity.api),
+    responseTelemetry: "pending",
     response: null,
   };
 }
@@ -71,14 +68,16 @@ export function createProviderResponseDiagnostic(
   request: ProviderRequestDiagnostic,
   status: number,
   capturedAt: number,
+  measureHeaderLatency = true,
 ): ProviderResponseDiagnostic {
-  return {
-    version: 1,
+  const identity = {
     requestIndex: request.requestIndex,
     capturedAt,
     status: Number.isInteger(status) ? status : 0,
-    responseHeaderLatencyMs: Math.max(0, capturedAt - request.capturedAt),
   };
+  return measureHeaderLatency
+    ? { ...identity, version: 1, responseHeaderLatencyMs: Math.max(0, capturedAt - request.capturedAt) }
+    : { ...identity, version: 2, responseHeaderLatencyMs: null };
 }
 
 export function restoreProviderRequestDiagnostic(value: unknown): ProviderRequestDiagnostic | undefined {
@@ -133,12 +132,12 @@ export function restoreProviderRequestDiagnostic(value: unknown): ProviderReques
 export function isProviderResponseDiagnostic(value: unknown): value is ProviderResponseDiagnostic {
   const record = asRecord(value);
   return (
-    record?.version === 1 &&
+    record !== undefined &&
     isNonNegativeInteger(record.requestIndex) &&
     isFiniteNumber(record.capturedAt) &&
     isNonNegativeInteger(record.status) &&
-    isFiniteNumber(record.responseHeaderLatencyMs) &&
-    record.responseHeaderLatencyMs >= 0
+    ((record.version === 1 && isFiniteNumber(record.responseHeaderLatencyMs) && record.responseHeaderLatencyMs >= 0) ||
+      (record.version === 2 && record.responseHeaderLatencyMs === null))
   );
 }
 
@@ -272,10 +271,6 @@ function normalizeNames(names: readonly string[]): string[] {
     .filter(Boolean)
     .sort((left, right) => left.localeCompare(right))
     .slice(0, MAX_TOOL_NAMES);
-}
-
-function responseTelemetryState(api: string | undefined): ResponseTelemetryState {
-  return api === "google-generative-ai" || api === "google-vertex" ? "unsupported" : "pending";
 }
 
 function jsonByteLength(value: unknown): number | null {

@@ -24,7 +24,7 @@ export interface CapturePolicy {
 export interface ProviderCaptureState {
   enabled: boolean;
   records: ProviderRequestDiagnostic[];
-  pendingRequestIndexes: number[];
+  openRequest: { record: ProviderRequestDiagnostic; measureHeaderLatency: boolean } | null;
   nextRequestIndex: number;
   policy: CapturePolicy;
   prunedRecordCount: number;
@@ -49,7 +49,7 @@ export function createCaptureState(): ProviderCaptureState {
   return {
     enabled: true,
     records: [],
-    pendingRequestIndexes: [],
+    openRequest: null,
     nextRequestIndex: 1,
     policy: { ...DEFAULT_CAPTURE_POLICY },
     prunedRecordCount: 0,
@@ -90,15 +90,10 @@ export function restoreCaptureState(entries: readonly SessionEntry[], capturedAt
   return state;
 }
 
-export function finalizePendingRequests(state: ProviderCaptureState): void {
-  const pendingIndexes = new Set(state.pendingRequestIndexes);
-  for (const record of state.records) {
-    if (pendingIndexes.has(record.requestIndex) && record.responseTelemetry === "pending") {
-      record.responseTelemetry = "unavailable";
-      record.response = null;
-    }
-  }
-  state.pendingRequestIndexes = [];
+export function finalizeOpenRequest(state: ProviderCaptureState): void {
+  const record = state.openRequest?.record;
+  if (record?.responseTelemetry === "pending") record.responseTelemetry = "unavailable";
+  state.openRequest = null;
 }
 
 export function createControlEntry(
@@ -120,8 +115,7 @@ export function pruneCaptureState(state: ProviderCaptureState, capturedAt: numbe
   const previousLength = state.records.length;
   const oldestAllowed = capturedAt - state.policy.maxAgeMinutes * 60_000;
   state.records = state.records.filter((record) => record.capturedAt >= oldestAllowed).slice(-state.policy.maxRecords);
-  const retainedIndexes = new Set(state.records.map(({ requestIndex }) => requestIndex));
-  state.pendingRequestIndexes = state.pendingRequestIndexes.filter((requestIndex) => retainedIndexes.has(requestIndex));
+  if (state.openRequest && !state.records.includes(state.openRequest.record)) state.openRequest = null;
   state.prunedRecordCount += previousLength - state.records.length;
 }
 
@@ -140,10 +134,13 @@ function pruneRestoredCaptureState(
 function applyControlToState(state: ProviderCaptureState, action: CaptureControlAction, policy: CapturePolicy): void {
   state.policy = { ...policy };
   if (action === "enable") state.enabled = true;
-  if (action === "disable") state.enabled = false;
+  if (action === "disable") {
+    state.enabled = false;
+    finalizeOpenRequest(state);
+  }
   if (action === "clear") {
     state.records = [];
-    state.pendingRequestIndexes = [];
+    state.openRequest = null;
   }
 }
 

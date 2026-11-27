@@ -22,6 +22,7 @@ import {
   attachProviderResponse,
   createProviderResponseDiagnostic,
   extractProviderRequestDiagnostic,
+  type ProviderRequestDiagnostic,
 } from "./provider-request.js";
 import { boundDiagnosticResponse, DIAGNOSTIC_ACTIONS, DIAGNOSTIC_SECTIONS } from "./report.js";
 import { RUNTIME_ENTRY_TYPE } from "./snapshot.js";
@@ -116,7 +117,7 @@ function createHarness(options: { extraToolCount?: number; modelApi?: string; pr
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
     },
     appendEntry(customType: string, data: unknown) {
-      entries.push(customEntry(customType, structuredClone(data)));
+      entries.push(customEntry(customType, data));
     },
     getThinkingLevel() {
       return "high";
@@ -263,13 +264,12 @@ test("extracts provider-visible tools from installed adapter payload shapes", ()
       requestIndex: 1,
       capturedAt: 100,
       sessionId: "session",
-      api: "google-generative-ai",
     },
   );
   assert.deepEqual(google.topLevelToolNames, ["edit", "read"]);
   assert.equal(google.toolDefinitionBytes, Buffer.byteLength(JSON.stringify(googleTools)));
   assert.equal(google.planModeMarkerPresent, true);
-  assert.equal(google.responseTelemetry, "unsupported");
+  assert.equal(google.responseTelemetry, "pending");
 
   const bedrockTools = [
     { toolSpec: { name: "bash", inputSchema: { json: { type: "object" } } } },
@@ -281,7 +281,6 @@ test("extracts provider-visible tools from installed adapter payload shapes", ()
       requestIndex: 2,
       capturedAt: 200,
       sessionId: "session",
-      api: "bedrock-converse-stream",
     },
   );
   assert.deepEqual(bedrock.topLevelToolNames, ["bash", "write"]);
@@ -305,7 +304,6 @@ test("extracts provider-visible tools from installed adapter payload shapes", ()
       requestIndex: 3,
       capturedAt: 300,
       sessionId: "session",
-      api: "pi-messages",
     },
   );
   assert.deepEqual(piMessages.topLevelToolNames, ["read", "write"]);
@@ -326,7 +324,6 @@ test("extracts provider-visible tools from installed adapter payload shapes", ()
       requestIndex: 4,
       capturedAt: 400,
       sessionId: "session",
-      api: "openai-completions",
     },
   );
   assert.deepEqual(kimi.topLevelToolNames, ["tool_search"]);
@@ -379,10 +376,12 @@ test("restores fork-sensitive controls and prunes the active reporting window", 
   assert.equal(restored.records[0].response?.status, 200);
   assert.deepEqual(restored.policy, { maxRecords: 1, maxAgeMinutes: 60 });
   assert.equal(restored.nextRequestIndex, 3);
-  assert.deepEqual(restored.pendingRequestIndexes, []);
+  assert.equal(restored.openRequest, null);
 
+  restored.openRequest = { record: restored.records[0], measureHeaderLatency: true };
   pruneCaptureState(restored, 2_000 + 61 * 60_000);
   assert.equal(restored.records.length, 0);
+  assert.equal(restored.openRequest, null);
 });
 
 test("reconstructs a long append-only history within the retained window", () => {
@@ -434,7 +433,6 @@ test("marks restored response-less captures unavailable instead of pending", asy
       sessionId: "session-1",
       provider: "openai",
       model: "gpt-test",
-      api: "openai-responses",
     },
   );
   harness.entries.push(
@@ -489,6 +487,10 @@ test("defaults to a concise agent report and supports targeted, control, bundle,
   );
   assert.equal(concise.format, "runtime-diagnostics/v2");
   assert.deepEqual(concise.details, {});
+  const { properties } = JSON.parse(JSON.stringify(harness.tool().parameters));
+  assert.deepEqual(properties.action.enum, DIAGNOSTIC_ACTIONS);
+  assert.deepEqual(properties.detail.enum, ["summary", "full"]);
+  assert.deepEqual(properties.sections.items.enum, DIAGNOSTIC_SECTIONS);
   assert.equal(JSON.stringify(concise).includes("authorization"), false);
 
   const targeted = parseToolResult(
@@ -522,12 +524,16 @@ test("defaults to a concise agent report and supports targeted, control, bundle,
     /requires maxRecords or maxAgeMinutes/,
   );
 
+  await harness.emit("before_provider_request", { payload: {} });
   const disabled = parseToolResult(
     await harness
       .tool()
       .execute("call-5", { action: "disable" }, new AbortController().signal, undefined, harness.context),
   );
   assert.equal(((disabled.summary as Record<string, unknown>).capture as { enabled: boolean }).enabled, false);
+  const disabledEntryCount = harness.entries.length;
+  await harness.emit("after_provider_response", { status: 503, headers: {} });
+  assert.equal(harness.entries.length, disabledEntryCount);
   harness.setTime(3_000);
   await harness.emit("before_provider_request", { payload: { tools: [{ name: "read" }] } });
   await harness
@@ -647,58 +653,59 @@ test("defaults to a concise agent report and supports targeted, control, bundle,
   );
 });
 
-test("clears unmatched provider requests before attributing responses in a later run", async () => {
-  const harness = createHarness();
-  await harness.emit("session_start", {});
-  harness.setTime(2_000);
-  await harness.emit("before_provider_request", { payload: { tools: [{ name: "read" }] } });
-  await harness.emit("agent_end", { messages: [] });
+test.each(["agent_end", "session_shutdown", "session_start", "session_tree"])(
+  "clears unmatched provider requests at %s before attributing a later response",
+  async (boundary) => {
+    const harness = createHarness();
+    await harness.emit("session_start", {});
+    harness.setTime(2_000);
+    await harness.emit("before_provider_request", { payload: { tools: [{ name: "read" }] } });
+    await harness.emit(boundary, { messages: [] });
+    await harness.emit("after_provider_response", { status: 502, headers: {} });
 
-  const unavailable = parseToolResult(
-    await harness
-      .tool()
-      .execute("call-unavailable", { action: "show" }, new AbortController().signal, undefined, harness.context),
-  );
-  const unavailableFinding = (unavailable.findings as Array<{ code: string; message: string }>).find(
-    ({ code }) => code === "response-telemetry-unavailable",
-  );
-  assert.ok(unavailableFinding);
-  assert.equal(
-    unavailableFinding.message,
-    "No response-header telemetry is available for the latest provider request.",
-  );
-  assert.doesNotMatch(unavailableFinding.message, /restor/iu);
+    const unavailable = parseToolResult(
+      await harness
+        .tool()
+        .execute("call-unavailable", { action: "show" }, new AbortController().signal, undefined, harness.context),
+    );
+    const unavailableFinding = (unavailable.findings as Array<{ code: string; message: string }>).find(
+      ({ code }) => code === "response-telemetry-unavailable",
+    );
+    assert.ok(unavailableFinding);
+    assert.equal(unavailableFinding.message, "Pi reported no HTTP response telemetry for the latest provider request.");
+    assert.doesNotMatch(unavailableFinding.message, /restor/iu);
 
-  harness.setTime(3_000);
-  await harness.emit("before_provider_request", { payload: { tools: [{ name: "read" }] } });
-  harness.setTime(3_025);
-  await harness.emit("after_provider_response", { status: 200, headers: {} });
+    harness.setTime(3_000);
+    await harness.emit("before_provider_request", { payload: { tools: [{ name: "read" }] } });
+    harness.setTime(3_025);
+    await harness.emit("after_provider_response", { status: 200, headers: {} });
 
-  const shown = parseToolResult(
-    await harness
-      .tool()
-      .execute("call-show", { action: "show", limit: 2 }, new AbortController().signal, undefined, harness.context),
-  );
-  const provider = (shown.details as Record<string, unknown>).providerRequestCapture as {
-    recent: Array<{
-      responseTelemetry: string;
-      response: null | { status: number; responseHeaderLatencyMs: number };
-    }>;
-    performance: { pendingRequestCount: number; unavailableRequestCount: number };
-  };
-  const records = provider.recent;
-  assert.equal(records[0].responseTelemetry, "unavailable");
-  assert.equal(records[0].response, null);
-  assert.equal(provider.performance.pendingRequestCount, 0);
-  assert.equal(provider.performance.unavailableRequestCount, 1);
-  assert.deepEqual(records[1].response, {
-    version: 1,
-    requestIndex: 2,
-    capturedAt: 3_025,
-    status: 200,
-    responseHeaderLatencyMs: 25,
-  });
-});
+    const shown = parseToolResult(
+      await harness
+        .tool()
+        .execute("call-show", { action: "show", limit: 2 }, new AbortController().signal, undefined, harness.context),
+    );
+    const provider = (shown.details as Record<string, unknown>).providerRequestCapture as {
+      recent: Array<{
+        responseTelemetry: string;
+        response: null | { status: number; responseHeaderLatencyMs: number };
+      }>;
+      performance: { pendingRequestCount: number; unavailableRequestCount: number };
+    };
+    const records = provider.recent;
+    assert.equal(records[0].responseTelemetry, "unavailable");
+    assert.equal(records[0].response, null);
+    assert.equal(provider.performance.pendingRequestCount, 0);
+    assert.equal(provider.performance.unavailableRequestCount, 1);
+    assert.deepEqual(records[1].response, {
+      version: 1,
+      requestIndex: 2,
+      capturedAt: 3_025,
+      status: 200,
+      responseHeaderLatencyMs: 25,
+    });
+  },
+);
 
 test("keeps retry responses attached until the final provider response", async () => {
   const harness = createHarness({ modelApi: "openai-codex-responses" });
@@ -741,40 +748,107 @@ test("keeps retry responses attached until the final provider response", async (
   );
 });
 
-test("marks Google response telemetry unsupported instead of pending", async () => {
-  const harness = createHarness({ modelApi: "google-generative-ai", provider: "google" });
-  await harness.emit("session_start", {});
-  harness.setTime(2_000);
-  await harness.emit("before_provider_request", {
-    payload: {
-      config: {
-        tools: [{ functionDeclarations: [{ name: "read" }] }],
+test.each(["google-generative-ai", "google-vertex"])("records only observed HTTP status for %s", async (modelApi) => {
+  const provider = modelApi === "google-vertex" ? modelApi : "google";
+  const harness = createHarness({ modelApi, provider });
+  const start = () => harness.emit("before_provider_request", { payload: {} });
+  const end = (stopReason: string) =>
+    harness.emit("message_end", {
+      message: {
+        role: "assistant",
+        provider,
+        model: "fixture",
+        stopReason,
+        usage: { input: 1, cacheRead: 0, cacheWrite: 0 },
       },
-    },
-  });
-  await harness.emit("agent_end", { messages: [] });
-
-  const shown = parseToolResult(
-    await harness
-      .tool()
-      .execute("call-google", { action: "show" }, new AbortController().signal, undefined, harness.context),
-  );
-  const provider = (shown.details as Record<string, unknown>).providerRequestCapture as {
-    latest: { responseTelemetry: string; response: unknown };
-    performance: {
-      completedRequestCount: number;
-      pendingRequestCount: number;
-      unsupportedRequestCount: number;
-      averageResponseHeaderLatencyMs: number | null;
+    });
+  const show = async () => {
+    const report = parseToolResult(
+      await harness
+        .tool()
+        .execute("show", { action: "show" }, new AbortController().signal, undefined, harness.context),
+    );
+    const capture = (report.details as Record<string, unknown>).providerRequestCapture as {
+      recent: ProviderRequestDiagnostic[];
+      comparison: { responseHeaderLatencyMsDelta: number | null };
+      performance: { averageResponseHeaderLatencyMs: number | null; statusCounts: Record<string, number> };
     };
+    return { report, ...capture };
   };
-  assert.equal(provider.latest.responseTelemetry, "unsupported");
-  assert.equal(provider.latest.response, null);
-  assert.equal(provider.performance.completedRequestCount, 0);
-  assert.equal(provider.performance.pendingRequestCount, 0);
-  assert.equal(provider.performance.unsupportedRequestCount, 1);
-  assert.equal(provider.performance.averageResponseHeaderLatencyMs, null);
-  assert.ok((shown.findings as Array<{ code: string }>).some(({ code }) => code === "response-telemetry-unsupported"));
+  await harness.emit("session_start", {});
+
+  await start();
+  await end("toolUse"); // Success produces no HTTP response event.
+  assert.equal((await show()).recent[0].responseTelemetry, "unavailable");
+  await start();
+  await harness.emit("after_provider_response", { status: 503, headers: {} });
+  await harness.emit("after_provider_response", { status: 429, headers: { "retry-after": "private-value" } });
+  await end("stop"); // A successful retry also produces no response event.
+  await harness.command().handler("provider", harness.context);
+  assert.match(harness.notifications.at(-1) ?? "", /last observed http status: 429/iu);
+
+  await start();
+  await start(); // A new payload without an intervening assistant boundary.
+  await harness.emit("after_provider_response", { status: 503, headers: {} });
+  await end("error");
+  await harness.emit("agent_end", { messages: [] });
+  const result = await show();
+  const records = (rows: ProviderRequestDiagnostic[]) =>
+    rows.map(({ requestIndex, responseTelemetry, response }) => [
+      requestIndex,
+      responseTelemetry,
+      response?.status ?? null,
+      response?.responseHeaderLatencyMs ?? null,
+    ]);
+  assert.deepEqual(records(result.recent), [
+    [1, "unavailable", null, null],
+    [2, "received", 429, null],
+    [3, "unavailable", null, null],
+    [4, "received", 503, null],
+  ]);
+  assert.deepEqual(result.performance.statusCounts, { "429": 1, "503": 1 });
+  assert.equal(result.performance.averageResponseHeaderLatencyMs, null);
+  assert.equal(result.comparison.responseHeaderLatencyMsDelta, null);
+  assert.doesNotMatch(JSON.stringify([harness.entries, result.report]), /"retry-after"|private-value/u);
+  assert.match(JSON.stringify(result.report.findings), /observed HTTP 503/u);
+  const payloadEntries = harness.entries.filter(
+    (entry) => entry.type === "custom" && entry.customType === PROVIDER_REQUEST_ENTRY_TYPE,
+  );
+  const beforeResponses = restoreCaptureState(payloadEntries, 1_000);
+  assert.deepEqual(
+    beforeResponses.records.map(({ responseTelemetry }) => responseTelemetry),
+    Array(4).fill("unavailable"),
+  );
+  await harness.emit("session_start", {});
+  assert.deepEqual(records((await show()).recent), records(result.recent));
+});
+
+test.each(["google-vertex", "pi-virtual"])("averages only measured header latency with %s", async (modelApi) => {
+  const harness = createHarness({ modelApi });
+  const measured = extractProviderRequestDiagnostic({}, { requestIndex: 1, capturedAt: 800, sessionId: "session-1" });
+  const legacy = { ...measured, requestIndex: 2, responseTelemetry: "unsupported" };
+  harness.entries.push(
+    customEntry(PROVIDER_REQUEST_ENTRY_TYPE, {
+      ...measured,
+      version: 2,
+      response: createProviderResponseDiagnostic(measured, 200, 850),
+    }),
+    customEntry(PROVIDER_REQUEST_ENTRY_TYPE, legacy),
+  );
+  await harness.emit("session_start", {});
+  await harness.emit("before_provider_request", { payload: {} });
+  await harness.emit("after_provider_response", { status: 429, headers: {} });
+  const report = parseToolResult(
+    await harness.tool().execute("show", { action: "show" }, new AbortController().signal, undefined, harness.context),
+  );
+  const capture = (report.details as Record<string, unknown>).providerRequestCapture as {
+    recent: ProviderRequestDiagnostic[];
+    performance: { averageResponseHeaderLatencyMs: number | null; unsupportedRequestCount: number };
+  };
+  assert.equal(capture.recent[1].responseTelemetry, "unsupported");
+  assert.equal(capture.recent[2].response?.status, 429);
+  assert.equal(capture.performance.unsupportedRequestCount, 1);
+  assert.equal(capture.performance.averageResponseHeaderLatencyMs, 50);
 });
 
 test("rebuilds fork-sensitive diagnostics after session tree navigation", async () => {
@@ -791,7 +865,6 @@ test("rebuilds fork-sensitive diagnostics after session tree navigation", async 
       sessionId: "session-1",
       provider: "openai",
       model: "gpt-test",
-      api: "openai-responses",
     },
   );
   const branchState = createCaptureState();

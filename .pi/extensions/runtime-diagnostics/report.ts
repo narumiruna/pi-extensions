@@ -40,9 +40,9 @@ const MAX_OUTPUT_LINES = 2_000;
 const PROVIDER_HOOK_LIMITATIONS = [
   "before_provider_request exposes the serialized payload at this extension's position in handler load order; later extensions can still replace it.",
   "The hook does not prove that the provider accepted or executed the exposed tools.",
-  "Response latency ends when response headers arrive and does not measure stream completion.",
-  "The installed google-generative-ai and google-vertex adapters do not emit response-header telemetry, so those requests are marked unsupported.",
-  "Provider responses are matched to requests by event order because Pi exposes no request identifier to this hook.",
+  "Header latency, where available, is estimated from the request and response hooks; it does not measure first-token time or stream completion.",
+  "When Pi reports Gemini and Vertex HTTP errors, it exposes status only. A successful attempt can emit no response event.",
+  "HTTP status describes the last observed attempt, not necessarily the final outcome. Provider responses are matched by event order because Pi exposes no request identifier.",
   "ExtensionAPI cannot enumerate passive event-only extensions, so extension visibility is limited to public tool and command surfaces.",
   "Retention bounds the active reporting window; Pi session custom entries are append-only and are not erased from an existing session file.",
 ];
@@ -214,8 +214,8 @@ export function formatCommandSummary(response: ReturnType<typeof createDiagnosti
       `Capture: ${provider?.enabled ? "enabled" : "disabled"}`,
       `Retained: ${provider?.retainedRecordCount ?? 0}`,
       `Latest request: ${provider?.latest?.requestIndex ?? "none"}`,
-      `Latest status: ${formatResponseTelemetry(provider?.latest ?? null)}`,
-      `Telemetry completed/pending/unavailable/unsupported: ${provider?.performance.completedRequestCount ?? 0}/${provider?.performance.pendingRequestCount ?? 0}/${provider?.performance.unavailableRequestCount ?? 0}/${provider?.performance.unsupportedRequestCount ?? 0}`,
+      `Last observed HTTP status: ${formatResponseTelemetry(provider?.latest ?? null)}`,
+      `Telemetry received/pending/unavailable/unsupported: ${provider?.performance.completedRequestCount ?? 0}/${provider?.performance.pendingRequestCount ?? 0}/${provider?.performance.unavailableRequestCount ?? 0}/${provider?.performance.unsupportedRequestCount ?? 0}`,
       `Average header latency: ${formatMilliseconds(provider?.performance.averageResponseHeaderLatencyMs ?? null)}`,
     ].join("\n");
   }
@@ -287,7 +287,10 @@ function createProviderReport(action: DiagnosticAction, limit: number, capture: 
   const recent = action === "show" || action === "bundle" ? capture.records.slice(-limit) : [];
   const latest = capture.records.at(-1) ?? null;
   const comparisonRecords = selectComparisonRecords(action, recent, capture.records);
-  const completed = capture.records.filter(({ responseTelemetry }) => responseTelemetry === "received");
+  const observed = capture.records.filter(({ responseTelemetry }) => responseTelemetry === "received");
+  const headerLatencies = observed.flatMap(({ response }) =>
+    response?.responseHeaderLatencyMs == null ? [] : [response.responseHeaderLatencyMs],
+  );
   const pending = capture.records.filter(({ responseTelemetry }) => responseTelemetry === "pending");
   const unavailable = capture.records.filter(({ responseTelemetry }) => responseTelemetry === "unavailable");
   const unsupported = capture.records.filter(({ responseTelemetry }) => responseTelemetry === "unsupported");
@@ -301,16 +304,15 @@ function createProviderReport(action: DiagnosticAction, limit: number, capture: 
     comparison:
       comparisonRecords.length === 2 ? compareProviderRequests(comparisonRecords[0], comparisonRecords[1]) : null,
     performance: {
-      completedRequestCount: completed.length,
+      completedRequestCount: observed.length,
       pendingRequestCount: pending.length,
       unavailableRequestCount: unavailable.length,
       unsupportedRequestCount: unsupported.length,
       averageResponseHeaderLatencyMs:
-        completed.length > 0
-          ? completed.reduce((total, record) => total + (record.response?.responseHeaderLatencyMs ?? 0), 0) /
-            completed.length
+        headerLatencies.length > 0
+          ? headerLatencies.reduce((total, latency) => total + latency, 0) / headerLatencies.length
           : null,
-      statusCounts: countStatuses(completed),
+      statusCounts: countStatuses(observed),
       requestBytes: sumComplete(capture.records.map(({ requestBytes }) => requestBytes)),
       toolDefinitionBytes: sumComplete(capture.records.map(({ toolDefinitionBytes }) => toolDefinitionBytes)),
     },
@@ -389,16 +391,15 @@ function createFindings(
     findings.push({
       severity: "info",
       code: "response-telemetry-unavailable",
-      message: "No response-header telemetry is available for the latest provider request.",
-      recommendation:
-        "Reproduce the request before interpreting HTTP status or response-header latency; if telemetry remains unavailable, inspect provider connectivity and cancellation.",
+      message: "Pi reported no HTTP response telemetry for the latest provider request.",
+      recommendation: "Check adapter coverage; missing telemetry does not establish a request failure.",
     });
   }
   if (latest.responseTelemetry === "unsupported") {
     findings.push({
       severity: "info",
       code: "response-telemetry-unsupported",
-      message: "The selected provider adapter does not expose response-header telemetry.",
+      message: "This historical request was recorded as not supporting response telemetry.",
       recommendation:
         "Use request-size and provider-visible-tool diagnostics without interpreting the missing HTTP status or latency as a pending response.",
     });
@@ -407,8 +408,9 @@ function createFindings(
     findings.push({
       severity: "warning",
       code: "provider-http-status",
-      message: `The latest provider response reported HTTP ${latest.response.status}.`,
-      recommendation: "Inspect provider availability, authentication, entitlement, and rate limits.",
+      message: `The last observed HTTP ${latest.response.status} does not necessarily describe the final request outcome.`,
+      recommendation:
+        "If the request failed, check provider availability, authentication, entitlement, and rate limits.",
     });
   }
   return findings;
