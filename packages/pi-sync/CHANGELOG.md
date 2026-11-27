@@ -1,5 +1,12 @@
 # @narumitw/pi-sync
 
+## 0.68.0
+
+### Minor Changes
+
+- 6ca6931: Breaking: retire Autonomous sync, Continuous sync, model-assisted conflict resolution, and unattended sync. Existing `sync.agentMode` and `sync.continuous` settings remain readable but have no effect. Reviewed manual sync, Automatic sync, and Startup transfer retain their existing rules. Drain and replace older daemons safely; revoke retained after-exit grants if they block an upgrade.
+- 6c092c4: Breaking: remove `.syncignore` and custom ignore-file policies. New setups recommend Selected paths; agent-directory scope with explicit exclusions remains available. Existing ignore-file settings, snapshot versions 6 and 7, and pending ignore-file recovery stop without converting or deleting data. Run `/skill:configure-pi-sync` for manual recovery guidance before resuming sync.
+
 ## 0.67.3
 
 ### Patch Changes
