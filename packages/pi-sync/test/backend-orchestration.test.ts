@@ -43,7 +43,7 @@ test("fake backend exercises push, pull, history, rollback, and revision state",
     const pushedSnapshot = await backend.readSnapshot(pushed.snapshotRef);
     const revisionOnly = await backend.publishSnapshot(pushedSnapshot, expectedRemoteHead(pushed));
     await status(ctx, commandOptions(), factory);
-    assert.match(notifications.at(-1)?.message ?? "", /remote changed since last sync: yes/);
+    assert.match(notifications.at(-1)?.message ?? "", /^ {2}Remote: changed$/mu);
     await syncBoth(ctx, commandOptions(), factory);
     assert.equal((await readStateForConfig(config)).lastRemoteRevision, revisionOnly.head.revision);
 
@@ -312,7 +312,7 @@ test("fake backend exercises status, diff, sync, and backend diagnostics", async
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(path.join(agentDir, "settings.json"), '{"local":true}\n');
     writeFileSync(localConfigPath(), JSON.stringify(requiredConfig()));
-    const backend = new MemorySyncBackend();
+    const backend = new MemorySyncBackend("memory:test", "memory · test\nInjected heading");
     const factory = () => backend;
     const { ctx, notifications } = createMockContext({ hasUI: true });
 
@@ -322,14 +322,22 @@ test("fake backend exercises status, diff, sync, and backend diagnostics", async
     await doctor(ctx, commandOptions(), factory);
 
     const output = notifications.map((item) => item.message).join("\n");
-    assert.match(output, /remote: empty/);
+    assert.match(output, /No previous sync recorded\n {2}Local: 1 file\n {2}Remote: empty/u);
     assert.match(output, /Remote is empty\. Local push would upload/);
     assert.match(output, /Pushed 1 files/);
-    assert.match(output, /publication safety: atomic-conditional \(verified atomic precondition\)/);
-    assert.match(output, /memory backend: ok/);
     const doctorOutput = notifications.at(-1)?.message ?? "";
-    assert.ok(doctorOutput.indexOf("secret scan:") < doctorOutput.indexOf("storage location:"));
-    assert.ok(doctorOutput.indexOf("lock:") < doctorOutput.indexOf("publication safety:"));
+    for (const report of [notifications[0]?.message ?? "", doctorOutput]) {
+      assert.ok(report.includes("\n  Location: memory · test?Injected heading\n"), report);
+      assert.doesNotMatch(report, /^Injected heading$/mu);
+    }
+    assert.match(
+      doctorOutput,
+      /Local checks\n {2}Configuration: OK\n {2}Secret scan: OK \(1 file checked\)\n {2}Operation lock: free\n\nStorage/u,
+    );
+    assert.match(
+      doctorOutput,
+      / {2}memory backend: ok\n {2}Publication safety: atomic-conditional \(verified atomic precondition\)\n\nSync scope/u,
+    );
   });
 });
 

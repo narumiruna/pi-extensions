@@ -61,6 +61,20 @@ async function checkedDaemonStatus() {
   await checkedCommand("/sync daemon status", `pi-sync-daemon: connected\nPID: ${daemon.pid}\nInstance: ${instance}`);
 }
 
+test("real Pi RPC receives both sync reports with their section breaks", async () => {
+  await checkedCommand(
+    "/sync status",
+    "Remote status · home\n\nNo previous sync recorded\n  Local: 1 file\n  Remote: empty",
+  );
+  assert.ok(fixture.storage.requests.every(({ method }) => method === "GET" || method === "PROPFIND"));
+  await checkedCommand("/sync doctor", "Diagnostics · home\n\nLocal checks\n  Configuration: OK");
+  const report = client.records.find(({ message }) => String(message).startsWith("Diagnostics · home\n"));
+  assert.match(String(report?.message), /\n\nStorage · dav\n {2}Location: /u);
+  assert.match(String(report?.message), /\n\nSync scope\n {2}included content: AGENTS\.md\n {2}sessions: excluded$/u);
+  assert.match(String(report?.message), /Publication safety: atomic-conditional/u);
+  assert.ok(fixture.storage.requests.some(({ method }) => method === "DELETE"));
+});
+
 async function sameSessionWire() {
   const after = await client.call({ type: "get_state" });
   assert.equal(after.sessionId, original.sessionId);
@@ -143,7 +157,7 @@ test("the first real Pi RPC daemon status repairs idle heartbeat expiry in the s
   } finally {
     await daemon.release();
   }
-  await checkedCommand("/sync status", "remote: empty");
+  await checkedCommand("/sync status", "Remote: empty");
   const wire = await checkSameSession();
   assert.deepEqual(
     wire.filter(({ method }) => method === "submit").map(({ operation }) => operation),
@@ -206,7 +220,7 @@ test("real Pi RPC recovery does not replay a push interrupted by heartbeat expir
     { timeout: 1_500 },
   );
   await checkedDaemonStatus();
-  await checkedCommand("/sync status", "remote: empty");
+  await checkedCommand("/sync status", "Remote: empty");
   await checkSameSession();
   await client.close();
   const wire = (await daemon.inspect()).slice(before);
@@ -255,7 +269,7 @@ test.each(["before-accept", "after-accept"] as const)(
     );
     await pull;
     await checkedDaemonStatus();
-    await checkedCommand("/sync status", "local changed since last sync: no");
+    await checkedCommand("/sync status", "Changes since last sync\n  Local: unchanged");
     await sameSessionWire();
     await client.close();
     const wire = (await daemon.inspect()).slice(wireFrom);
@@ -303,7 +317,7 @@ test.each(["before-accept", "after-accept"] as const)(
     assert.equal(notifications.length, 3, JSON.stringify(notifications));
     assert.match(String(notifications[0]?.message), /^Pulled 1 files from /u);
     assert.match(String(notifications[1]?.message), /^pi-sync-daemon: connected\n/u);
-    assert.match(String(notifications[2]?.message), /^sync setup: home\b/u);
+    assert.match(String(notifications[2]?.message), /^Remote status · home\n/u);
     const status = output.filter(({ method, statusKey }) => method === "setStatus" && statusKey === "sync");
     assert.ok(status.length > 0, "No sync status records");
     assert.equal(status.at(-1)?.statusText, undefined);

@@ -751,7 +751,7 @@ test("doctor warns when lock metadata is unreadable", async () => {
     const { ctx, notifications } = createMockContext({ hasUI: true });
 
     await runRegisteredCommand(mock, ctx, "doctor");
-    assert.match(notifications.at(-1)?.message ?? "", /lock: unreadable/);
+    assert.match(notifications.at(-1)?.message ?? "", /Operation lock: unreadable/u);
     assert.equal(notifications.at(-1)?.level, "warning");
   });
 });
@@ -765,7 +765,7 @@ test("doctor warns when a lock guard is active without metadata", async () => {
     const { ctx, notifications } = createMockContext({ hasUI: true });
 
     await runRegisteredCommand(mock, ctx, "doctor");
-    assert.match(notifications.at(-1)?.message ?? "", /lock: guard active.*metadata/);
+    assert.match(notifications.at(-1)?.message ?? "", /Operation lock: guard active.*metadata/u);
     assert.equal(notifications.at(-1)?.level, "warning");
   });
 });
@@ -787,7 +787,7 @@ test("doctor warns when a valid lock owner has exited", async () => {
     const { ctx, notifications } = createMockContext({ hasUI: true });
 
     await runRegisteredCommand(mock, ctx, "doctor");
-    assert.match(notifications.at(-1)?.message ?? "", /lock: stale.*\/sync unlock --stale/);
+    assert.match(notifications.at(-1)?.message ?? "", /Operation lock: stale.*\/sync unlock --stale/u);
     assert.equal(notifications.at(-1)?.level, "warning");
   });
 });
@@ -820,12 +820,12 @@ test("doctor reports live and free lock states", async () => {
       const { ctx, notifications } = createMockContext({ hasUI: true });
 
       await runRegisteredCommand(mock, ctx, "doctor");
-      assert.match(notifications.at(-1)?.message ?? "", /lock: held by pid/);
+      assert.match(notifications.at(-1)?.message ?? "", /Operation lock: held by PID/u);
       assert.equal(notifications.at(-1)?.level, "info");
 
       await fs.rm(lockPath());
       await runRegisteredCommand(mock, ctx, "doctor");
-      assert.match(notifications.at(-1)?.message ?? "", /lock: free/);
+      assert.match(notifications.at(-1)?.message ?? "", /Operation lock: free/u);
       assert.equal(notifications.at(-1)?.level, "info");
     });
   } finally {

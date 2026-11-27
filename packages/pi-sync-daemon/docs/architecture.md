@@ -63,6 +63,8 @@ Settings versions 8 and 9 remain readable without retired ignore-file fields. Th
 | `ctx.model`, `modelRegistry.streamSimple` | Explicit selected model identity/signature; independent public SDK runtime | `model-signature.ts`, `resolver-host.ts` |
 | `withFileMutationQueue` | Participating Pi queue grants plus daemon-local queue | `service-host.ts`, Pi adapter `daemon/apply-gate.ts` |
 
+Diagnostic and remote-status `notify` events set `layout: "report"`. The engine sanitizes values before it adds line breaks. The Pi client preserves those breaks and sanitizes each line before display; unmarked notifications keep the single-line default.
+
 Terminal formatting utilities are not interactive components. No daemon-owned menu, editor, or Pi custom UI is permitted. Exact review content stays data until the client renders it with its original UI and sanitization rules.
 
 ## Decision and failure matrix
