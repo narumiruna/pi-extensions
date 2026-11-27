@@ -13,7 +13,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { BtwPasteGuard, type BtwShortcuts } from "./keybindings.js";
 import {
-  type BtwLayout,
+  type BtwSplitLayout,
   DEFAULT_BTW_SIDE_PANE_RATIO,
   MAX_BTW_SIDE_PANE_RATIO,
   MIN_BTW_SIDE_PANE_RATIO,
@@ -101,7 +101,7 @@ export interface BtwSplitPaneOptions {
   mainInput: Component;
   sideScrollView?: ScrollView;
   shortcuts?: BtwShortcuts;
-  layout: Exclude<BtwLayout, "fullscreen">;
+  layout: BtwSplitLayout;
   theme: Theme;
   terminalColumns(): number;
   terminalRows(): number;
@@ -566,7 +566,7 @@ function setScrollViewPrimary(scrollView: ScrollView, primary: boolean): void {
 function paneForMouseClick(
   data: string,
   terminalColumns: number,
-  layout: Exclude<BtwLayout, "fullscreen">,
+  layout: BtwSplitLayout,
   sidePaneRatio: number,
 ): BtwActivePane | undefined {
   const match = SGR_MOUSE_PRESS_PATTERN.exec(data);
@@ -582,7 +582,7 @@ function paneForMouseClick(
   return clickedLeft ? "main" : "side";
 }
 
-function paneWidths(width: number, layout: Exclude<BtwLayout, "fullscreen">, sidePaneRatio: number) {
+function paneWidths(width: number, layout: BtwSplitLayout, sidePaneRatio: number) {
   const contentWidth = Math.max(2, width - PANE_DIVIDER_COLUMNS);
   const sideWidth = clamp(
     Math.round(contentWidth * clampSidePaneRatio(sidePaneRatio)),

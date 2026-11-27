@@ -769,9 +769,9 @@ test("btw settings save automatic selection copying immediately and preserve unk
   });
 });
 
-test("btw settings save the side-thread pane placement immediately and preserve unknown fields", async () => {
+test("btw settings save the floating layout immediately and preserve unknown fields", async () => {
   await withMenu(async ({ settingsPath, tui, ctx, notifications }) => {
-    await writeFile(settingsPath, '{"future":{"kept":true}}\n', "utf8");
+    await writeFile(settingsPath, '{"layout":"right-pane","future":{"kept":true}}\n', "utf8");
     const running = showBtwCommandMenu(ctx, {
       settingsPath,
       currentThinkingLevel: "medium",
@@ -779,17 +779,17 @@ test("btw settings save the side-thread pane placement immediately and preserve 
     });
     await openSettings(tui);
     tui.type("Side-thread layout");
-    assert.match(tui.render().join("\n"), /Side-thread layout\s+Fullscreen/);
+    assert.match(tui.render().join("\n"), /Side-thread layout\s+Side thread right/);
     tui.press("tui.select.confirm");
     await tui.waitForPending();
     await tui.waitForOpen();
 
     assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
       future: { kept: true },
-      layout: "left-pane",
+      layout: "floating",
     });
-    assert.match(tui.render().join("\n"), /Side-thread layout\s+Side thread left/);
-    assert.ok(notifications.some(({ message }) => /layout: Side thread left.*next opens/i.test(message)));
+    assert.match(tui.render().join("\n"), /Side-thread layout\s+Floating/);
+    assert.ok(notifications.some(({ message }) => /layout: Floating.*next opens/i.test(message)));
     tui.press("ctrl+c");
     assert.equal(await running, "closed");
   });

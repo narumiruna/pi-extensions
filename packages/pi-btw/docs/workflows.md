@@ -76,7 +76,7 @@ The mouse wheel scrolls the pane under the pointer without moving keyboard focus
 A branch selected through **Start from main thread tree…** supplies side-model context but does not replace the active main thread shown in the other pane.
 The main agent may keep running, and the main pane redraws its progress while either pane is active.
 With **Main focus**, submissions start or steer main work without closing BTW, whether BTW opened while the main agent was idle or responding.
-The initial manager and fullscreen-only workspaces remain modal; a split releases the command wait only after its first view mounts and receives focus.
+The initial manager, fullscreen-only workspace, and floating window are modal; only a split releases the command wait after its first view mounts and receives focus.
 Another `/btw` invocation warns instead of opening an overlapping manager or workspace, including during startup and cleanup.
 Submit each question with Pi's effective editor submission binding, Enter by default; successful prior questions and answers remain available to the side model.
 
@@ -99,6 +99,19 @@ The native transcript uses automatic scrollbars and previous/next-message naviga
 Manual scrolling stays fixed when new turns appear, during resize, and when content temporarily fits; explicitly returning to the latest content resumes follow mode.
 On Pi 0.85 or newer, scrolling away from the latest content reveals **Jump to latest message**.
 Click it or use Pi's effective `tui.altScreen.bottom` binding (`Ctrl+End` by default) to resume following new output.
+
+## Floating window
+
+Select **Floating** under **Side-thread layout**. Pi draws BTW over the main conversation without changing terminal modes. The editor and its key hints stay at the bottom as the window resizes, leaving space for the transcript above. Close BTW to use the main editor again.
+
+1. Press the function key shown in the window title (usually **F10**).
+2. Use the arrow keys to move the window and **Shift+arrow** to change its width or height. Follow the title if it shows alternate controls.
+3. Press **Escape** or the same function key to return to the composer without closing the window.
+
+In Pi's fullscreen mode, you can also drag the title bar to move the window or drag its bottom-right corner to resize it. Pi's regular mode leaves mouse input to the terminal, so use the keyboard there.
+The position and size stay in effect across screens until you close the window. Reopening starts centered. The window stays within the terminal when it shrinks.
+
+Use Pi's paging keys to scroll the side transcript, or the mouse wheel over the window in fullscreen mode. Use a dedicated fullscreen or split layout for BTW transcript search and BTW's mouse selection and copy controls.
 
 ## Thinking and queued questions
 

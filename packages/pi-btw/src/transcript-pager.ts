@@ -31,6 +31,7 @@ import {
   renderConversationFooter,
   renderWorkingBorder,
 } from "./conversation-chrome.js";
+import { isBtwFloatingTui } from "./floating-frame.js";
 import {
   BtwPasteGuard,
   type BtwShortcuts,
@@ -130,7 +131,9 @@ function usableKeys(keybindings: KeybindingsManager, action: keyof Keybindings, 
 
 function submitHint(tui: TUI, keybindings: KeybindingsManager, verb: string): string {
   const earlier =
-    tui.mode === "fullscreen" ? VIEWPORT_ACTIONS : (["tui.altScreen.pageUp", "tui.altScreen.pageDown"] as const);
+    tui.mode === "fullscreen" && !isBtwFloatingTui(tui)
+      ? VIEWPORT_ACTIONS
+      : (["tui.altScreen.pageUp", "tui.altScreen.pageDown"] as const);
   const blockers = [
     ...getBtwHostInputBlockers(tui),
     "ctrl+c",
@@ -146,7 +149,7 @@ function pagingHint(tui: TUI, keybindings: KeybindingsManager): string {
   const actions = ["tui.altScreen.pageUp", "tui.altScreen.pageDown"] as const;
   const labels = actions.flatMap((action) => {
     const earlier =
-      tui.mode === "fullscreen"
+      tui.mode === "fullscreen" && !isBtwFloatingTui(tui)
         ? VIEWPORT_ACTIONS.slice(0, VIEWPORT_ACTIONS.indexOf(action))
         : action === "tui.altScreen.pageDown"
           ? (["tui.altScreen.pageUp"] as const)
@@ -170,8 +173,7 @@ function handleFallbackPaging(
   keybindings: KeybindingsManager,
   scrollView: ScrollView,
 ): boolean {
-  // The native renderer already dispatched these before the focused component.
-  if (tui.mode === "fullscreen" || isKeyRelease(data)) return false;
+  if ((tui.mode === "fullscreen" && !isBtwFloatingTui(tui)) || isKeyRelease(data)) return false;
   for (const [action, direction] of [
     ["tui.altScreen.pageUp", -1],
     ["tui.altScreen.pageDown", 1],
@@ -355,6 +357,7 @@ export class BtwTranscriptPager implements BtwFullscreenLayoutComponent, Focusab
       this.renderFooter(safeWidth),
       editorLines,
       availableRows,
+      { dockAtBottom: isBtwFloatingTui(this.tui) },
     ).map((line) => truncateToWidth(line, safeWidth));
   }
 
@@ -630,7 +633,7 @@ export class BtwAnsweringView implements BtwFullscreenLayoutComponent, Focusable
       this.renderFooter(safeWidth),
       editorLines,
       availableRows,
-      steeringLines,
+      { statusLines: steeringLines, dockAtBottom: isBtwFloatingTui(this.tui) },
     ).map((line) => truncateToWidth(line, safeWidth));
   }
 
@@ -854,7 +857,7 @@ function fitComposerLayout(
   footerLines: string[],
   editorLines: string[],
   availableRows: number,
-  statusLines: string[] = [],
+  { statusLines = [], dockAtBottom = false }: { statusLines?: string[]; dockAtBottom?: boolean } = {},
 ): string[] {
   if (availableRows <= 0) return [];
   // Keep the active input first in the row budget, while retaining native
@@ -863,8 +866,11 @@ function fitComposerLayout(
   const footerBudget = Math.min(footerLines.length, availableRows - editorBudget);
   const statusBudget = Math.min(statusLines.length, availableRows - editorBudget - footerBudget);
   const transcriptBudget = availableRows - editorBudget - footerBudget - statusBudget;
+  const transcriptLines = contentLines.slice(0, transcriptBudget);
+  const blankRows = dockAtBottom ? transcriptBudget - transcriptLines.length : 0;
   return [
-    ...contentLines.slice(0, transcriptBudget),
+    ...transcriptLines,
+    ...Array<string>(blankRows).fill(""),
     ...statusLines.slice(0, statusBudget),
     ...fitEditorLines(editorLines, editorBudget),
     ...footerLines.slice(0, footerBudget),
