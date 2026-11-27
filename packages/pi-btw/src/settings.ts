@@ -7,7 +7,9 @@ import { BTW_SHORTCUT_ACTIONS, type BtwKeybindingOverrides, normalizeBtwKey } fr
 import { BTW_THINKING_LEVELS, type BtwThinkingLevel } from "./side-thread.js";
 
 export const BTW_SETTINGS_FILE = "pi-btw.json";
-export const BTW_LAYOUTS = ["fullscreen", "left-pane", "right-pane"] as const;
+export const BTW_SPLIT_LAYOUTS = ["left-pane", "right-pane"] as const;
+export type BtwSplitLayout = (typeof BTW_SPLIT_LAYOUTS)[number];
+export const BTW_LAYOUTS = ["fullscreen", ...BTW_SPLIT_LAYOUTS, "floating"] as const;
 export type BtwLayout = (typeof BTW_LAYOUTS)[number];
 export const DEFAULT_BTW_LAYOUT: BtwLayout = "fullscreen";
 export const DEFAULT_FULLSCREEN_COPY_ON_SELECT = true;

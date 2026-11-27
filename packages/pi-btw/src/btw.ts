@@ -8,6 +8,7 @@ import type {
   BtwTextRangeSelectorState,
 } from "./bring-to-main.js";
 import type { BtwDisplayModel } from "./conversation-chrome.js";
+import type { RunBtwFloating } from "./floating-ui.js";
 import type { RunBtwFullscreen } from "./fullscreen-ui.js";
 import type { importMainUpdates } from "./import-main-updates.js";
 import { buildMainContextSnapshot, captureMainContextSource } from "./main-context-snapshot.js";
@@ -16,6 +17,7 @@ import type { pickMainEntry } from "./main-tree-picker.js";
 import type { BtwCommandMenuResult, BtwResumeThreadSummary } from "./menu.js";
 import { type BtwSessionLifetime, registerBtwSessionLifetimes } from "./session-lifetime.js";
 import {
+  BTW_LAYOUTS,
   type BtwSettings,
   effectiveBtwLayout,
   effectiveBtwSidePaneRatio,
@@ -144,7 +146,7 @@ export async function loadBtwThinkingLevel(
 
   options.warn?.(
     sanitizeSingleLine(
-      `pi-btw settings ignored: ${settings.reason}; expected optional model "provider/model-id", omitted thinkingLevel for Same as main thread or thinkingLevel "${BTW_THINKING_LEVELS.join('" | "')}", boolean rememberThinkingLevelChanges, boolean fullscreenCopyOnSelect, layout "fullscreen" | "left-pane" | "right-pane", and sidePaneRatio from 0.2 to 0.8. Using current Pi thinking level.`,
+      `pi-btw settings ignored: ${settings.reason}; expected optional model "provider/model-id", omitted thinkingLevel for Same as main thread or thinkingLevel "${BTW_THINKING_LEVELS.join('" | "')}", boolean rememberThinkingLevelChanges, boolean fullscreenCopyOnSelect, layout "${BTW_LAYOUTS.join('" | "')}", and sidePaneRatio from 0.2 to 0.8. Using current Pi thinking level.`,
     ),
   );
   return currentThinkingLevel;
@@ -188,7 +190,13 @@ export interface BtwExtensionDependencies {
   resolveModel?: typeof resolveBtwModelForCommand;
   runThread?: typeof runBtwThread;
   runFullscreen?: RunBtwFullscreen;
+  runFloating?: RunBtwFloating;
 }
+
+const runFloatingOnFirstUse: RunBtwFloating = async (ctx, run, keybindings) => {
+  const { runBtwFloating } = await import("./floating-ui.js");
+  if (!ctx.signal?.aborted) await runBtwFloating(ctx, run, keybindings);
+};
 
 const runFullscreenOnFirstUse: RunBtwFullscreen = async (ctx, run, options) => {
   const { runBtwFullscreen } = await import("./fullscreen-ui.js");
@@ -211,6 +219,7 @@ export default function btw(pi: ExtensionAPI, dependencies: BtwExtensionDependen
   const resolveModel = dependencies.resolveModel ?? resolveBtwModelForCommand;
   const runThread = dependencies.runThread ?? runBtwThread;
   const runFullscreen = dependencies.runFullscreen ?? runFullscreenOnFirstUse;
+  const runFloating = dependencies.runFloating ?? runFloatingOnFirstUse;
   const subscribeMainThreadUpdates = registerBtwMainThreadUpdates(pi);
   const getLifetime = registerBtwSessionLifetimes(pi);
   const sessionThreads = new WeakMap<BtwSessionLifetime, Map<string, BtwThreadState>>();
@@ -328,47 +337,49 @@ export default function btw(pi: ExtensionAPI, dependencies: BtwExtensionDependen
     }
     const startingTurnCount = state?.thread.turns.length ?? 0;
 
+    const openThread = (workspaceCtx: ExtensionCommandContext) => {
+      if (workspaceCtx.signal?.aborted) return Promise.resolve({ kind: "closed" as const });
+      if (!state) {
+        const createdAt = Date.now();
+        const source = selectedSource ?? captureMainContextSource(workspaceCtx.sessionManager);
+        state = {
+          id: `btw-${nextThreadNumber}`,
+          thread: createSideThread(source.conversationContext, source.anchor),
+          thinkingLevel: settings.thinkingLevel ?? pi.getThinkingLevel(),
+          createdAt,
+          updatedAt: createdAt,
+        };
+        nextThreadNumber += 1;
+      }
+      return lifetime.track(
+        runThread({
+          initialQuestion: question || undefined,
+          selected: resolution.selected,
+          thinkingLevel: state.thinkingLevel,
+          rememberThinkingLevelChanges: !sameAsMainThinkingLevel && effectiveRememberThinkingLevelChanges(settings),
+          state,
+          ctx: workspaceCtx,
+        }),
+      );
+    };
     try {
-      await runFullscreen(
-        ctx,
-        (fullscreenCtx) => {
-          if (lifetime.signal.aborted) return Promise.resolve({ kind: "closed" as const });
-          if (!state) {
-            const createdAt = Date.now();
-            const source = selectedSource ?? captureMainContextSource(fullscreenCtx.sessionManager);
-            state = {
-              id: `btw-${nextThreadNumber}`,
-              thread: createSideThread(source.conversationContext, source.anchor),
-              thinkingLevel: settings.thinkingLevel ?? pi.getThinkingLevel(),
-              createdAt,
-              updatedAt: createdAt,
-            };
-            nextThreadNumber += 1;
-          }
-          return lifetime.track(
-            runThread({
-              initialQuestion: question || undefined,
-              selected: resolution.selected,
-              thinkingLevel: state.thinkingLevel,
-              rememberThinkingLevelChanges: !sameAsMainThinkingLevel && effectiveRememberThinkingLevelChanges(settings),
-              state,
-              ctx: fullscreenCtx,
-            }),
-          );
-        },
-        {
+      const layout = effectiveBtwLayout(settings);
+      if (layout === "floating") {
+        await runFloating(ctx, openThread, settings.keybindings);
+      } else {
+        await runFullscreen(ctx, openThread, {
           signal: lifetime.signal,
           canRestoreParent: lifetime.canRestoreParent,
           copyOnSelect: effectiveFullscreenCopyOnSelect(settings),
-          layout: effectiveBtwLayout(settings),
-          ...(effectiveBtwLayout(settings) !== "fullscreen" ? { onSplitReady: releaseMainInput } : {}),
+          layout,
+          ...(layout !== "fullscreen" ? { onSplitReady: releaseMainInput } : {}),
           sidePaneRatio: effectiveBtwSidePaneRatio(settings),
           persistSidePaneRatio: (ratio, signal) =>
             updateBtwSettings({ sidePaneRatio: ratio }, { signal }).then(() => undefined),
           subscribeMainThreadUpdates: (listener) => subscribeMainThreadUpdates(ctx.sessionManager, listener),
           ...(settings.keybindings ? { keybindings: settings.keybindings } : {}),
-        },
-      );
+        });
+      }
     } finally {
       if (
         !lifetime.signal.aborted &&

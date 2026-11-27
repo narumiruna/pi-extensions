@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader, type ExtensionCommandContext, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { getKeybindings, TuiMainScreen } from "@earendil-works/pi-tui";
+import { FullscreenTerminal } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import {
   type BuildMetadata,
@@ -9,11 +11,14 @@ import {
   registerRuntimeBuilderContract,
 } from "../../../test/runtime-builder-contract.js";
 import { createMockContext } from "../../../test/support.js";
+import { appearanceTheme } from "./native-appearance-support.js";
 
 const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   packageId: "pi-btw",
   forbiddenEagerInputs: [
     "src/bring-to-main.ts",
+    "src/floating-frame.ts",
+    "src/floating-ui.ts",
     "src/fullscreen-ui.ts",
     "src/fullscreen-renderer.ts",
     "src/workspace-layout.ts",
@@ -62,6 +67,8 @@ function assertSourceStartupBoundary(metadata: BuildMetadata) {
   visit("src/index.ts");
   for (const source of [
     "src/bring-to-main.ts",
+    "src/floating-frame.ts",
+    "src/floating-ui.ts",
     "src/fullscreen-ui.ts",
     "src/fullscreen-renderer.ts",
     "src/workspace-layout.ts",
@@ -111,6 +118,37 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
       }
       await extension.commands.get("btw")?.handler("", context.ctx);
       assert.equal(menus, 1, "generated default command crosses the lazy menu boundary");
+
+      await writeFile(join(agentDir, "pi-btw.json"), '{"layout":"floating"}\n');
+      const parent = new TuiMainScreen(new FullscreenTerminal());
+      const model = { id: "smoke", provider: "fixture" };
+      const theme = appearanceTheme("dark");
+      let mountedInNativeOverlay = false;
+      type Custom = ExtensionCommandContext["ui"]["custom"];
+      const custom: Custom = async (factory, options) => {
+        const result = Promise.withResolvers<unknown>();
+        const host = await factory(parent, theme, getKeybindings() as Parameters<typeof factory>[2], result.resolve);
+        const opts = options?.overlayOptions;
+        const overlay = parent.showOverlay(host, typeof opts === "function" ? opts() : opts);
+        try {
+          options?.onHandle?.(overlay);
+          mountedInNativeOverlay = options?.overlay === true && overlay.isFocused();
+          host.handleInput?.("\u0003");
+          return result.promise as never;
+        } finally {
+          overlay.hide();
+          host.dispose?.();
+        }
+      };
+      const floating = createMockContext({
+        mode: "tui",
+        custom,
+        model,
+        modelRegistry: { getAvailable: () => [model] },
+        sessionManager: (context.ctx as ExtensionCommandContext).sessionManager,
+      });
+      await extension.commands.get("btw")?.handler("do not send", floating.ctx);
+      assert.equal(mountedInNativeOverlay, true, "generated direct command opens the lazy floating window");
     } finally {
       for (const handler of extension.handlers.get("session_shutdown") ?? []) {
         await handler({ type: "session_shutdown", reason: "reload" }, context.ctx);

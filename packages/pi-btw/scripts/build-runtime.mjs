@@ -13,6 +13,8 @@ export const { buildRuntime, validateEagerGraph, validateGeneratedFiles, publish
   ].join("\n"),
   forbiddenEagerInputs: [
     "src/bring-to-main.ts",
+    "src/floating-frame.ts",
+    "src/floating-ui.ts",
     "src/fullscreen-ui.ts",
     "src/fullscreen-renderer.ts",
     "src/workspace-layout.ts",

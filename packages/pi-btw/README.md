@@ -11,7 +11,7 @@ Only context you explicitly bring back is loaded into the main editor.
 - Uses any persisted main-session branch as context without switching branches.
 - Supports scrollable answers, transcript search, a clickable jump-to-latest control, follow-up questions, queued steering, and in-memory resume.
 - Uses Pi's message components, a native-style working editor border, and a compact footer below the editor.
-- Offers fullscreen, side-thread-left, and side-thread-right workspaces with Pi's live main-thread view, mouse or keyboard pane focus, and a draggable remembered divider.
+- Offers fullscreen, split panes with a draggable divider, and a movable, resizable floating window.
 - Renders supported Mermaid fences as width-safe, themed Unicode diagrams without a browser or network request.
 - Manually previews and imports new main-thread context without stopping main work or rewriting earlier side exchanges.
 - Keeps side questions and answers out of the main conversation by default.
@@ -119,8 +119,9 @@ A failed Settings-screen save instead restores the previous displayed value.
 Turn **Copy selection automatically** off to retain highlighted selections and copy them with Pi's effective `app.message.copy` binding.
 Pi-btw does not inherit Pi core's setting of the same name because Pi's public extension API does not expose its effective value.
 
-`layout` controls the dedicated workspace and defaults to `fullscreen` when omitted.
-Accepted values are `fullscreen`, `left-pane`, and `right-pane`.
+Choose `/btw` → **Settings** → **Side-thread layout**. The change applies the next time a new or resumed side thread opens.
+Accepted `layout` values are `fullscreen` (default), `left-pane`, `right-pane`, and `floating`.
+**Floating** keeps the main conversation visible behind a movable, resizable window; see the [window controls](./docs/workflows.md#floating-window).
 The pane names identify the side thread's position; the other pane reuses Pi's native main-thread rendering at pane width and stays current while BTW is open.
 A single muted divider separates the panes; click either pane or use the pane-switch shortcut to move keyboard focus.
 The footer below the editor shows **BTW focus** or **Main focus** and the available switch key.
@@ -133,7 +134,6 @@ Pi's search and keyboard viewport controls apply to the active pane.
 The mouse wheel scrolls the pane under the pointer without moving keyboard focus, and both panes continue redrawing while either pane is active.
 If you selected context from the main-thread tree, the main pane still shows the active main thread while the side model receives the selected branch.
 Pane layouts collapse to the side thread alone below 80 terminal columns and return keyboard focus to it.
-Choose **Side-thread layout** in Settings; changes apply the next time a new or resumed BTW workspace opens.
 
 ### Keybindings
 
@@ -144,7 +144,7 @@ The literal `/btw settings` remains a side question, not a settings subcommand.
 
 | JSON field under `keybindings` | Default | Action |
 | --- | --- | --- |
-| `exit` | `ctrl+c` | Cancel and leave the dedicated side-thread workspace, including its nested dialogs. |
+| `exit` | `ctrl+c` | Cancel and leave the side-thread workspace, including its nested dialogs. |
 | `cycleThinkingLevel` | Inherit Pi's `app.thinking.cycle` | Cycle supported levels while composing or generating. |
 | `bringToMain` | `ctrl+r` | Open the bring-to-main chooser after a completed answer. |
 | `switchPane` | First available `f6`, `f7`, or `f8` | Switch keyboard focus between panes in a split workspace. |
@@ -194,7 +194,7 @@ The file is read for every `/btw` invocation, so edits apply without `/reload`.
 - Resume state is memory-only and lasts only for the current extension instance.
 - Main-conversation context is a limited text snapshot, not the complete session; see [context scope](./docs/workflows.md#choose-context-and-resume-threads).
 - Clipboard access depends on Pi's host helper, the operating system, and the terminal.
-- The live workspace uses a separate TUI instance and BTW-owned private host-layout access because Pi has no public workspace-composition API; see the [core-alignment handoff](./docs/core-alignment.md) for tested safeguards, exact limits, and proposed APIs. This intentionally deviates from Pi's advice against a second terminal renderer: only one renderer owns the terminal at a time, without an official support guarantee. The [shared fullscreen handoff record](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-tui-kit/docs/fullscreen-handoff.md) records the Kit physical-lifecycle contract, two-consumer proof, release guards, and physical-terminal limits; layouts, input, and domain state stay in BTW.
+- The dedicated split workspace uses a separate TUI instance and BTW-owned private host-layout access because Pi has no public workspace-composition API; see the [core-alignment handoff](./docs/core-alignment.md) for tested safeguards, exact limits, and proposed APIs. This intentionally deviates from Pi's advice against a second terminal renderer: only one renderer owns the terminal at a time, without an official support guarantee. The [shared fullscreen handoff record](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-tui-kit/docs/fullscreen-handoff.md) records the Kit physical-lifecycle contract, two-consumer proof, release guards, and physical-terminal limits; layouts, input, and domain state stay in BTW.
 - Pi does not expose all effective renderer options or a public clipboard-read callback. BTW uses native automatic wheel behavior but does not inherit private host wheel overrides or right-click clipboard paste.
 - Conversation appearance follows native defaults, not custom host editor/footer extensions or private padding settings. BTW uses one-cell message padding and zero-cell editor padding; see the [appearance reference and before/after frames](./docs/native-appearance.md).
 - Malformed, unsupported, or oversized Mermaid diagrams remain readable as fenced source; partial parses also show a warning.

@@ -22,7 +22,7 @@ import {
   setBtwShortcuts,
 } from "./keybindings.js";
 import type { BtwMainThreadUpdateSubscription } from "./main-thread-updates.js";
-import type { BtwLayout } from "./settings.js";
+import type { BtwSplitLayout } from "./settings.js";
 import { sanitizeSingleLine } from "./text.js";
 import { type BtwFullscreenLayoutComponent, BtwMainThreadInput, BtwSplitPane } from "./workspace-layout.js";
 
@@ -45,7 +45,7 @@ export interface BtwFullscreenOptions {
   canRestoreParent?(): boolean;
   keybindings?: BtwKeybindingOverrides;
   copyOnSelect?: boolean;
-  layout?: BtwLayout;
+  layout?: "fullscreen" | BtwSplitLayout;
   sidePaneRatio?: number;
   persistSidePaneRatio?(ratio: number, signal: AbortSignal): Promise<void>;
   subscribeMainThreadUpdates?: BtwMainThreadUpdateSubscription;

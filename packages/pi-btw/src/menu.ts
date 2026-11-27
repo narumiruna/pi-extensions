@@ -76,6 +76,7 @@ const BTW_LAYOUT_LABELS: Record<BtwLayout, string> = {
   fullscreen: "Fullscreen",
   "left-pane": "Side thread left",
   "right-pane": "Side thread right",
+  floating: "Floating",
 };
 const BTW_LAYOUT_VALUES = Object.values(BTW_LAYOUT_LABELS);
 type BtwCustomOptions = Parameters<ExtensionCommandContext["ui"]["custom"]>[1];
@@ -428,7 +429,7 @@ export async function showBtwCommandMenu(
           {
             id: "layout",
             label: "Side-thread layout",
-            description: "Use the full workspace or place BTW beside the live, click-to-focus main thread.",
+            description: "Use the full workspace, a pane beside the main thread, or a movable floating window.",
             currentValue: BTW_LAYOUT_LABELS[effectiveBtwLayout(state.settings)],
             values: BTW_LAYOUT_VALUES,
             action: "set-layout",

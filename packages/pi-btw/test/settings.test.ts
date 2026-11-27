@@ -72,6 +72,7 @@ test("btw settings validate optional booleans, workspace layouts, and side-pane 
     },
   );
   assert.equal(effectiveBtwLayout({ layout: "right-pane" }), "right-pane");
+  assert.deepEqual(normalizeBtwSettings({ layout: "floating" }), { layout: "floating" });
   assert.equal(effectiveBtwSidePaneRatio({ sidePaneRatio: 0.35 }), 0.35);
   assert.equal(effectiveFullscreenCopyOnSelect({ fullscreenCopyOnSelect: false }), false);
   assert.equal(normalizeBtwSettings({ rememberThinkingLevelChanges: "yes" }), undefined);
