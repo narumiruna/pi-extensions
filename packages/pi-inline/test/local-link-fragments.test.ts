@@ -95,14 +95,20 @@ const osc8Params = (line: string) =>
     .map((part) => part.split(";", 1)[0])
     .filter((params) => params.startsWith("id="));
 
-test("decorates code blocks alongside native file links and applies a saved copy mode without reload", async ({
+test("shows left copy buttons by default and applies and restores saved positions and modes", async ({
   onTestFinished,
 }) => {
   const session = await fragmentFixture(onTestFinished);
   const source = "[[Note]] [README](./README.md)\n\n```js\nconst example = 3;\n```";
-  const click = session.draw(source);
-  expect(click.join("\n")).toContain("pi-inline-code-");
-  expect(click.map(stripTerminalSequences).join("\n")).not.toContain("Copy code");
+  const button = session.draw(source);
+  const buttonColumn = (rows: readonly string[]) =>
+    rows
+      .map(stripTerminalSequences)
+      .find((line) => line.trim() === "Copy code")
+      ?.indexOf("Copy code");
+  expect(button.join("\n")).toContain("pi-inline-code-");
+  expect(buttonColumn(button)).toBe(1);
+  expect(button.join("\n")).toContain("./README.md");
   const saveMode = async (mode: "click" | "button" | "off") => {
     session.settings.mockImplementationOnce(async (_ctx, options) => {
       expect(await options.saveCodeBlockCopyMode(mode, options.signal)).toBe(true);
@@ -110,15 +116,28 @@ test("decorates code blocks alongside native file links and applies a saved copy
     });
     await session.runCommand();
   };
+  const savePosition = async (position: "left" | "right") => {
+    session.settings.mockImplementationOnce(async (_ctx, options) => {
+      expect(await options.saveCodeBlockCopyButtonPosition(position, options.signal)).toBe(true);
+      return false;
+    });
+    await session.runCommand();
+  };
   try {
-    await saveMode("button");
-    const button = session.draw(source);
-    expect(button.map(stripTerminalSequences).join("\n")).toContain("Copy code");
-    expect(button.join("\n")).toContain("./README.md");
+    await savePosition("right");
+    const rightColumn = buttonColumn(session.draw(source));
+    expect(rightColumn).toBeGreaterThan(1);
+    await session.startWidget();
+    expect(buttonColumn(session.draw(source))).toBe(rightColumn);
+    await saveMode("click");
+    const click = session.draw(source);
+    expect(click.join("\n")).toContain("pi-inline-code-");
+    expect(click.map(stripTerminalSequences).join("\n")).not.toContain("Copy code");
     await saveMode("off");
     expect(session.draw(source).join("\n")).not.toContain("pi-inline-code-");
   } finally {
-    await saveMode("click");
+    await savePosition("left");
+    await saveMode("button");
   }
 });
 

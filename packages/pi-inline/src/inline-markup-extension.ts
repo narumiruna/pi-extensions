@@ -11,9 +11,12 @@ import { createLinkMarker } from "./external-link-marker.js";
 import { createHoverPreview } from "./hover-preview.js";
 import { renderInlineMarkup } from "./inline-markup.js";
 import {
+  type CodeBlockCopyButtonPosition,
   type CodeBlockCopyMode,
+  DEFAULT_CODE_BLOCK_COPY_BUTTON_POSITION,
   loadPromptSettings,
   type PromptHintSettings,
+  saveCodeBlockCopyButtonPosition,
   saveCodeBlockCopyMode,
   savePromptHint,
 } from "./settings.js";
@@ -30,6 +33,7 @@ interface Session {
   marker: ReturnType<typeof createLinkMarker>;
   copy: ReturnType<typeof createCodeBlockCopy>;
   codeBlockCopyMode: CodeBlockCopyMode;
+  codeBlockCopyButtonPosition: CodeBlockCopyButtonPosition;
   clearWidget(): void;
   dismissPreview(): void;
   wiki?: ReturnType<typeof createWikilinks>;
@@ -82,6 +86,7 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
             marker,
             copy,
             codeBlockCopyMode: "off",
+            codeBlockCopyButtonPosition: DEFAULT_CODE_BLOCK_COPY_BUTTON_POSITION,
             clearWidget: () => ui.setWidget(WIDGET_KEY, undefined),
             dismissPreview: preview.dismiss,
           };
@@ -107,6 +112,8 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
       if (settings.signal.aborted || session?.marker !== marker) return;
       session.prompt = snapshot.prompt;
       session.codeBlockCopyMode = snapshot.codeBlockCopyMode;
+      session.codeBlockCopyButtonPosition = snapshot.codeBlockCopyButtonPosition;
+      session.copy.setButtonPosition(snapshot.codeBlockCopyButtonPosition);
       session.copy.setMode(snapshot.codeBlockCopyMode);
       if (snapshot.saveBlocked && hasUI)
         ui.notify("pi-inline: Invalid or unreadable settings were ignored.", "warning");
@@ -136,10 +143,24 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
     const menu = new AbortController();
     current.menu = menu;
     const live = () => session === current && current.menu === menu && !menu.signal.aborted;
+    async function applyCopySetting(signal: AbortSignal, save: () => Promise<boolean>, apply: () => void) {
+      if (!live() || signal.aborted) return false;
+      const pending = save();
+      writes.add(pending);
+      try {
+        const committed = await pending;
+        if (session !== current || (!committed && signal.aborted)) return false;
+        apply();
+        return true;
+      } finally {
+        writes.delete(pending);
+      }
+    }
     try {
       const saved = await loadPromptSettings(menu.signal);
       if (!live()) return;
       let savedCopyMode = saved.codeBlockCopyMode;
+      let savedButtonPosition = saved.codeBlockCopyButtonPosition;
       const changed = await showInlineSettings(ctx, {
         signal: menu.signal,
         wikilinks: Boolean(current.wiki),
@@ -150,23 +171,28 @@ export function inlineMarkupExtension(pi: ExtensionAPI): void {
         active,
         saveBlocked: Boolean(saved.saveBlocked),
         codeBlockCopyMode: current.codeBlockCopyMode,
+        codeBlockCopyButtonPosition: current.codeBlockCopyButtonPosition,
         canCopyCodeBlocks: supportsCodeBlockCopy(),
-        async saveCodeBlockCopyMode(mode, signal) {
-          if (!live() || signal.aborted) return false;
-          const pending = saveCodeBlockCopyMode(savedCopyMode, mode, signal);
-          writes.add(pending);
-          try {
-            const committed = await pending;
-            if (!committed && signal.aborted) return false;
-            savedCopyMode = mode;
-            if (session !== current) return false;
-            current.codeBlockCopyMode = mode;
-            current.copy.setMode(mode);
-            return true;
-          } finally {
-            writes.delete(pending);
-          }
-        },
+        saveCodeBlockCopyMode: (mode, signal) =>
+          applyCopySetting(
+            signal,
+            () => saveCodeBlockCopyMode(savedCopyMode, mode, signal),
+            () => {
+              savedCopyMode = mode;
+              current.codeBlockCopyMode = mode;
+              current.copy.setMode(mode);
+            },
+          ),
+        saveCodeBlockCopyButtonPosition: (position, signal) =>
+          applyCopySetting(
+            signal,
+            () => saveCodeBlockCopyButtonPosition(savedButtonPosition, position, signal),
+            () => {
+              savedButtonPosition = position;
+              current.codeBlockCopyButtonPosition = position;
+              current.copy.setButtonPosition(position);
+            },
+          ),
         async save(change, signal) {
           if (!live() || signal.aborted) return false;
           const pending = savePromptHint(saved.prompt, change, signal);

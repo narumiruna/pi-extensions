@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { createCodeBlockCopy, supportsCodeBlockCopy } from "../src/code-block-copy.js";
-import type { CodeBlockCopyMode } from "../src/settings.js";
+import type { CodeBlockCopyButtonPosition, CodeBlockCopyMode } from "../src/settings.js";
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: The renderer uses OSC 8 and SGR.
 const meta = /\x1b\]8;id=pi-inline-code-(?:end;\x07|[a-f0-9]{64}-\d+-[cbr]-\d+-\d+;\x07\x1b\[39m)/g;
@@ -88,13 +88,19 @@ test("does not decorate while off, streaming, unavailable, or outside supported 
 });
 
 test.each([
-  { width: 40, label: " Copy code " },
-  { width: 12, label: " Copy code " },
-  { width: 11, label: " Copy " },
-  { width: 6, label: " Copy " },
-  { width: 5, label: undefined },
-])("uses a right-aligned solid button at $width columns", ({ width, label }) => {
+  { position: "left", width: 40, label: " Copy code ", start: 0 },
+  { position: "left", width: 11, label: " Copy code ", start: 0 },
+  { position: "left", width: 10, label: " Copy ", start: 0 },
+  { position: "left", width: 6, label: " Copy ", start: 0 },
+  { position: "left", width: 5, label: undefined, start: undefined },
+  { position: "right", width: 40, label: " Copy code ", start: 28 },
+  { position: "right", width: 12, label: " Copy code ", start: 0 },
+  { position: "right", width: 11, label: " Copy ", start: 4 },
+  { position: "right", width: 6, label: " Copy ", start: 0 },
+  { position: "right", width: 5, label: undefined, start: undefined },
+] as const)("aligns the solid button $position at $width columns", ({ position, width, label, start }) => {
   const copy = createCodeBlockCopy(alt, theme, undefined, vi.fn(), vi.fn(), true);
+  copy.setButtonPosition(position);
   copy.setMode("button");
   const rows = new Markdown(code, 0, 0, getMarkdownTheme(), undefined, {
     transform: (source, availableWidth) => copy.transform(source, context(availableWidth)),
@@ -106,10 +112,14 @@ test.each([
     return;
   }
   expect(row).toContain(`${buttonBackground}${label}\x1b[49m`);
-  expect(visibleWidth(row?.split(buttonBackground)[0] ?? "")).toBe(width - label.length - Number(width > 6));
+  expect(visibleWidth(row?.split(buttonBackground)[0] ?? "")).toBe(start);
 });
 
-function fullscreen(onTestFinished: (cleanup: () => void) => void, mode: CodeBlockCopyMode = "click") {
+function fullscreen(
+  onTestFinished: (cleanup: () => void) => void,
+  mode: CodeBlockCopyMode = "click",
+  position: CodeBlockCopyButtonPosition = "left",
+) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   const longBody = [
     ...Array.from({ length: 24 }, (_, index) => `const row${index} = "long-line-${index}-visible-target";`),
@@ -148,6 +158,7 @@ function fullscreen(onTestFinished: (cleanup: () => void) => void, mode: CodeBlo
   const copyCode = vi.fn(async (_text: string): Promise<void> => {});
   const notify = vi.fn();
   const gestures = createCodeBlockCopy(tui, theme, undefined, copyCode, notify, true);
+  gestures.setButtonPosition(position);
   gestures.setMode(mode);
   const markdown = new Markdown(source, 1, 0, markdownTheme, undefined, {
     transform: (text, availableWidth) => gestures.transform(text, context(availableWidth)),
@@ -233,10 +244,15 @@ test.for([0, 1])(
   },
 );
 
-test.for([-1, "Copy code".length])(
-  "copies immediately from painted button padding (offset %i)",
-  async (offset, { onTestFinished }) => {
-    const fixture = fullscreen(onTestFinished, "button");
+test.for([
+  ["left", -1],
+  ["left", "Copy code".length],
+  ["right", -1],
+  ["right", "Copy code".length],
+] as const)(
+  "copies immediately from painted button padding (%s, offset %i)",
+  async ([position, offset], { onTestFinished }) => {
+    const fixture = fullscreen(onTestFinished, "button", position);
     const bodyPoint = fixture.point();
     fixture.click(bodyPoint.x, bodyPoint.y);
     await vi.advanceTimersByTimeAsync(501);

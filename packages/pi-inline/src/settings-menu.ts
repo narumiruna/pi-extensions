@@ -9,7 +9,9 @@ import {
 } from "@narumitw/pi-tui-kit";
 import { createPromptHintEditor } from "./prompt-hint-editor.js";
 import {
+  CODE_BLOCK_COPY_BUTTON_POSITIONS,
   CODE_BLOCK_COPY_MODES,
+  type CodeBlockCopyButtonPosition,
   type CodeBlockCopyMode,
   type PromptHintChange,
   type PromptHintSettings,
@@ -23,13 +25,16 @@ interface InlineSettingsOptions {
   active: PromptHintSettings;
   saveBlocked: boolean;
   codeBlockCopyMode: CodeBlockCopyMode;
+  codeBlockCopyButtonPosition: CodeBlockCopyButtonPosition;
   canCopyCodeBlocks: boolean;
   saveCodeBlockCopyMode(mode: CodeBlockCopyMode, signal: AbortSignal): Promise<boolean>;
+  saveCodeBlockCopyButtonPosition(position: CodeBlockCopyButtonPosition, signal: AbortSignal): Promise<boolean>;
   save(change: PromptHintChange, signal: AbortSignal): Promise<boolean>;
 }
 
 const VALUES = ["On", "Off"];
 const COPY_LABELS: Record<CodeBlockCopyMode, string> = { click: "Click block", button: "Copy button", off: "Off" };
+const POSITION_LABELS: Record<CodeBlockCopyButtonPosition, string> = { left: "Left", right: "Right" };
 
 function onOff(enabled: boolean) {
   return enabled ? "On" : "Off";
@@ -52,6 +57,8 @@ export async function showInlineSettings(
       let pending: Promise<void> | undefined;
       let saving: string | undefined;
       let copyMode = options.codeBlockCopyMode;
+      let buttonPosition = options.codeBlockCopyButtonPosition;
+      const canSaveCopySettings = options.canCopyCodeBlocks && !options.saveBlocked;
       let editor: ReturnType<typeof createPromptHintEditor> | undefined;
       let focused = false;
       let renderedWidth = 0;
@@ -84,19 +91,17 @@ export async function showInlineSettings(
         });
       }
 
-      function saveCopyMode(mode: CodeBlockCopyMode) {
-        if (signal.aborted || pending || options.saveBlocked || !options.canCopyCodeBlocks) return;
+      function saveCopySetting(save: () => Promise<boolean>, apply: () => void) {
+        if (signal.aborted || pending || !canSaveCopySettings) return;
         saving = "Saving code block copy…";
         pending = Promise.resolve().then(async () => {
           try {
-            if (signal.aborted) return;
-            if (!(await options.saveCodeBlockCopyMode(mode, signal)) || signal.aborted) return;
-            copyMode = mode;
-            list.updateValue("codeBlockCopyMode", COPY_LABELS[mode]);
+            if (signal.aborted || !(await save()) || signal.aborted) return;
+            apply();
           } catch (error) {
             if (signal.aborted) return;
             const detail = error instanceof Error ? sanitizeTerminalDocument(error.message).replace(/\n/gu, " ") : "";
-            ctx.ui.notify(detail || "Could not save the code block copy mode.", "error");
+            ctx.ui.notify(detail || "Could not save the code block copy setting.", "error");
           } finally {
             pending = undefined;
             saving = undefined;
@@ -151,13 +156,19 @@ export async function showInlineSettings(
           id: "codeBlockCopyMode",
           label: "Code Block Copy",
           currentValue: COPY_LABELS[copyMode],
-          values:
-            options.saveBlocked || !options.canCopyCodeBlocks
-              ? undefined
-              : CODE_BLOCK_COPY_MODES.map((mode) => COPY_LABELS[mode]),
+          values: canSaveCopySettings ? CODE_BLOCK_COPY_MODES.map((mode) => COPY_LABELS[mode]) : undefined,
           description: options.canCopyCodeBlocks
             ? "Choose how to copy a whole code block in fullscreen."
             : "Unavailable in this version of Pi. Native selection stays active.",
+        },
+        {
+          id: "codeBlockCopyButtonPosition",
+          label: "Copy Button Position",
+          currentValue: POSITION_LABELS[buttonPosition],
+          values: canSaveCopySettings
+            ? CODE_BLOCK_COPY_BUTTON_POSITIONS.map((position) => POSITION_LABELS[position])
+            : undefined,
+          description: "Align the button when Copy button mode is selected.",
         },
       ];
       const list = new SettingsList(
@@ -181,7 +192,26 @@ export async function showInlineSettings(
           if (id === "codeBlockCopyMode") {
             list.updateValue(id, COPY_LABELS[copyMode]);
             const mode = CODE_BLOCK_COPY_MODES.find((mode) => COPY_LABELS[mode] === value);
-            if (mode) saveCopyMode(mode);
+            if (mode)
+              saveCopySetting(
+                () => options.saveCodeBlockCopyMode(mode, signal),
+                () => {
+                  copyMode = mode;
+                  list.updateValue(id, COPY_LABELS[mode]);
+                },
+              );
+          }
+          if (id === "codeBlockCopyButtonPosition") {
+            list.updateValue(id, POSITION_LABELS[buttonPosition]);
+            const position = CODE_BLOCK_COPY_BUTTON_POSITIONS.find((position) => POSITION_LABELS[position] === value);
+            if (position)
+              saveCopySetting(
+                () => options.saveCodeBlockCopyButtonPosition(position, signal),
+                () => {
+                  buttonPosition = position;
+                  list.updateValue(id, POSITION_LABELS[position]);
+                },
+              );
           }
         },
         () => complete(false),

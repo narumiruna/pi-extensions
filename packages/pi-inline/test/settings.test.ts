@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { INLINE_FORMATTING_PROMPT } from "../src/prompt.js";
-import type { CodeBlockCopyMode } from "../src/settings.js";
+import type { CodeBlockCopyButtonPosition, CodeBlockCopyMode } from "../src/settings.js";
 
 vi.mock("node:fs/promises", { spy: true });
 
@@ -26,8 +26,8 @@ let agentDir: string;
 let settingsFile: string;
 let settings: typeof import("../src/settings.js");
 const defaults = { enabled: true, text: INLINE_FORMATTING_PROMPT };
-const defaultSnapshot = { prompt: defaults, codeBlockCopyMode: "click" };
-const blockedSnapshot = { prompt: defaults, codeBlockCopyMode: "off", saveBlocked: true };
+const defaultSnapshot = { prompt: defaults, codeBlockCopyMode: "button", codeBlockCopyButtonPosition: "left" };
+const blockedSnapshot = { ...defaultSnapshot, codeBlockCopyMode: "off", saveBlocked: true };
 const signal = new AbortController().signal;
 const disable = { key: "promptHintEnabled", value: false } as const;
 const textChange = (value: string) => ({ key: "promptHintText", value }) as const;
@@ -68,10 +68,13 @@ async function expectIntact(source: string): Promise<void> {
 test("loads defaults and leaves a missing user settings directory untouched until a changed save", async () => {
   expect(settings.DEFAULT_PROMPT_HINT).toEqual(defaults);
   expect(settings.CODE_BLOCK_COPY_MODES).toEqual(["click", "button", "off"]);
-  expect(settings.DEFAULT_CODE_BLOCK_COPY_MODE).toBe("click");
+  expect(settings.DEFAULT_CODE_BLOCK_COPY_MODE).toBe("button");
+  expect(settings.CODE_BLOCK_COPY_BUTTON_POSITIONS).toEqual(["left", "right"]);
+  expect(settings.DEFAULT_CODE_BLOCK_COPY_BUTTON_POSITION).toBe("left");
   await expect(settings.loadPromptSettings(signal)).resolves.toEqual(defaultSnapshot);
   await expect(settings.savePromptHint(defaults, textChange(defaults.text), signal)).resolves.toBe(false);
-  await expect(settings.saveCodeBlockCopyMode("click", "click", signal)).resolves.toBe(false);
+  await expect(settings.saveCodeBlockCopyMode("button", "button", signal)).resolves.toBe(false);
+  await expect(settings.saveCodeBlockCopyButtonPosition("left", "left", signal)).resolves.toBe(false);
   await expect(lstat(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
   expect(open).not.toHaveBeenCalled();
   expect(writeFile).not.toHaveBeenCalled();
@@ -86,12 +89,24 @@ test.for([undefined, "click", "button", "off"] as const)(
   "loads the copy mode from a sparse file (%j)",
   async (mode) => {
     const source = await setDocument({ codeBlockCopyMode: mode });
-    const codeBlockCopyMode = mode ?? "click";
-    await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ prompt: defaults, codeBlockCopyMode });
+    const codeBlockCopyMode = mode ?? "button";
+    await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ ...defaultSnapshot, codeBlockCopyMode });
     await expect(settings.saveCodeBlockCopyMode(codeBlockCopyMode, codeBlockCopyMode, signal)).resolves.toBe(false);
     await expectIntact(source);
   },
 );
+
+test("persists either explicit position without materializing other defaults", async () => {
+  await expect(settings.saveCodeBlockCopyButtonPosition("left", "right", signal)).resolves.toBe(true);
+  expect(JSON.parse(await readFile(settingsFile, "utf8"))).toEqual({ codeBlockCopyButtonPosition: "right" });
+  await expect(settings.loadPromptSettings(signal)).resolves.toEqual({
+    ...defaultSnapshot,
+    codeBlockCopyButtonPosition: "right",
+  });
+  await expect(settings.saveCodeBlockCopyButtonPosition("right", "left", signal)).resolves.toBe(true);
+  expect(JSON.parse(await readFile(settingsFile, "utf8"))).toEqual({ codeBlockCopyButtonPosition: "left" });
+  await expect(settings.loadPromptSettings(signal)).resolves.toEqual(defaultSnapshot);
+});
 
 test("normalizes CRLF and leaves significant whitespace and unknown fields intact", async () => {
   const rawText = "  First line\t\r\n\r\n\tLast line  \r\n";
@@ -105,7 +120,7 @@ test("normalizes CRLF and leaves significant whitespace and unknown fields intac
   const source = await setDocument(original);
   vi.mocked(lstat).mockClear();
   vi.mocked(realpath).mockClear();
-  await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ prompt: expected, codeBlockCopyMode: "click" });
+  await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ ...defaultSnapshot, prompt: expected });
   expect(lstat).toHaveBeenCalledExactlyOnceWith(settingsFile, { bigint: true });
   expect(vi.mocked(realpath).mock.calls.every(([path]) => path === settingsFile)).toBe(true);
   await expect(settings.savePromptHint(expected, textChange(rawText), signal)).resolves.toBe(false);
@@ -134,8 +149,8 @@ test("updates only prompt keys and preserves unrecognized JSON values byte for b
   await expect(settings.savePromptHint(defaults, disable, signal)).resolves.toBe(true);
   await expectIntact(replaced.replace('"New"\n', '"New",\n  "promptHintEnabled": false\n'));
   await expect(settings.loadPromptSettings(signal)).resolves.toEqual({
+    ...defaultSnapshot,
     prompt: { enabled: false, text: "New" },
-    codeBlockCopyMode: "click",
   });
 });
 
@@ -149,7 +164,7 @@ test("edits the last copy mode key and preserves other JSON bytes", async () => 
 }\n`;
   await setSource(source);
   const prompt = { ...defaults, text: "  Keep this  " };
-  await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ prompt, codeBlockCopyMode: "button" });
+  await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ ...defaultSnapshot, prompt });
   await expect(settings.saveCodeBlockCopyMode("button", "off", signal)).resolves.toBe(true);
   const replaced = source.replace('"button"', '"off"');
   await expectIntact(replaced);
@@ -175,7 +190,7 @@ test("disables copying and blocks saving when the existing file cannot be opened
   vi.mocked(open).mockRejectedValueOnce(denied).mockRejectedValueOnce(denied);
   await expect(settings.loadPromptSettings(signal)).resolves.toEqual(blockedSnapshot);
   await expect(settings.saveCodeBlockCopyMode("off", "click", signal)).rejects.toThrow("Repair the user");
-  await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ prompt: defaults, codeBlockCopyMode: "button" });
+  await expect(settings.loadPromptSettings(signal)).resolves.toEqual(defaultSnapshot);
   await expectIntact(source);
 });
 
@@ -223,14 +238,37 @@ test.for([null, true, 0, {}, ["click"], "", "Click", "off "])(
       promptHintEnabled: prompt.enabled,
       promptHintText: prompt.text.replaceAll("\n", "\r\n"),
       codeBlockCopyMode: mode,
+      codeBlockCopyButtonPosition: "right",
     });
     await expect(settings.loadPromptSettings(signal)).resolves.toEqual({
+      ...blockedSnapshot,
       prompt,
-      codeBlockCopyMode: "off",
-      saveBlocked: true,
+      codeBlockCopyButtonPosition: "right",
     });
     await expect(settings.savePromptHint(prompt, textChange("New hint"), signal)).rejects.toThrow("Repair the user");
     await expect(settings.saveCodeBlockCopyMode("off", "off", signal)).rejects.toThrow("Repair the user");
+    await expectIntact(source);
+  },
+);
+
+test.for([null, true, 0, {}, ["left"], "", "Left", "right "])(
+  "uses left but keeps a valid copy mode and prompt and blocks all saves for an invalid position (%j)",
+  async (position) => {
+    const prompt = { enabled: false, text: "  Custom\n\t hint  " };
+    const source = await setDocument({
+      promptHintEnabled: prompt.enabled,
+      promptHintText: prompt.text.replaceAll("\n", "\r\n"),
+      codeBlockCopyMode: "click",
+      codeBlockCopyButtonPosition: position,
+    });
+    await expect(settings.loadPromptSettings(signal)).resolves.toEqual({
+      ...blockedSnapshot,
+      prompt,
+      codeBlockCopyMode: "click",
+    });
+    await expect(settings.savePromptHint(prompt, textChange("New hint"), signal)).rejects.toThrow("Repair the user");
+    await expect(settings.saveCodeBlockCopyMode("click", "button", signal)).rejects.toThrow("Repair the user");
+    await expect(settings.saveCodeBlockCopyButtonPosition("left", "right", signal)).rejects.toThrow("Repair the user");
     await expectIntact(source);
   },
 );
@@ -241,7 +279,7 @@ test.for([null, {}, [], ["/no-longer-checked"]])(
     const source = `{"externalPreviewRoots": ${JSON.stringify(externalPreviewRoots)}, "promptHintText": "Keep this"}`;
     await setSource(source);
     const prompt = { enabled: true, text: "Keep this" };
-    await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ prompt, codeBlockCopyMode: "click" });
+    await expect(settings.loadPromptSettings(signal)).resolves.toEqual({ ...defaultSnapshot, prompt });
     await expect(settings.savePromptHint(prompt, textChange("New text"), signal)).resolves.toBe(true);
     await expectIntact(source.replace("Keep this", "New text"));
   },
@@ -306,7 +344,15 @@ test("rejects an invalid requested copy mode before accessing the file", async (
   expect(lstat).not.toHaveBeenCalled();
 });
 
-test("orders rapid reads and both save paths through a directory alias and rejects stale edits", async () => {
+test("rejects an invalid requested copy button position before accessing the file", async () => {
+  const invalid = "secret\x1b[0m" as CodeBlockCopyButtonPosition;
+  await expect(settings.saveCodeBlockCopyButtonPosition("left", invalid, signal)).rejects.toThrow(
+    "Select Left or Right for the code block copy button position.",
+  );
+  expect(lstat).not.toHaveBeenCalled();
+});
+
+test("orders rapid reads and field updates through a directory alias and rejects stale edits", async () => {
   const actualAgentDir = join(base, "agent-target");
   await mkdir(actualAgentDir);
   await symlink(actualAgentDir, agentDir, "dir");
@@ -318,34 +364,45 @@ test("orders rapid reads and both save paths through a directory alias and rejec
     await resume.promise;
     await actual.rename(from, to);
   });
-  const first = settings.saveCodeBlockCopyMode("click", "button", signal);
+  const first = settings.saveCodeBlockCopyMode("button", "click", signal);
   await entered.promise;
   const afterFirst = settings.loadPromptSettings(signal);
   const text = settings.savePromptHint(defaults, textChange("Second change"), signal);
   const afterText = settings.loadPromptSettings(signal);
-  const staleMode = expect(settings.saveCodeBlockCopyMode("click", "button", signal)).rejects.toThrow(
+  const position = settings.saveCodeBlockCopyButtonPosition("left", "right", signal);
+  const afterPosition = settings.loadPromptSettings(signal);
+  const staleMode = expect(settings.saveCodeBlockCopyMode("button", "click", signal)).rejects.toThrow(
     "Settings changed. Reopen the menu before saving.",
   );
   const staleHint = expect(settings.savePromptHint(defaults, textChange("Second change"), signal)).rejects.toThrow(
     "Settings changed. Reopen the menu before saving.",
   );
-  const mode = settings.saveCodeBlockCopyMode("button", "off", signal);
+  const stalePosition = expect(settings.saveCodeBlockCopyButtonPosition("left", "right", signal)).rejects.toThrow(
+    "Settings changed. Reopen the menu before saving.",
+  );
+  const mode = settings.saveCodeBlockCopyMode("click", "off", signal);
   const afterMode = settings.loadPromptSettings(signal);
   resume.resolve();
 
+  const firstSnapshot = { ...defaultSnapshot, codeBlockCopyMode: "click" };
+  const textSnapshot = { ...firstSnapshot, prompt: { ...defaults, text: "Second change" } };
+  const positionSnapshot = { ...textSnapshot, codeBlockCopyButtonPosition: "right" };
   await expect(first).resolves.toBe(true);
-  await expect(afterFirst).resolves.toEqual({ prompt: defaults, codeBlockCopyMode: "button" });
+  await expect(afterFirst).resolves.toEqual(firstSnapshot);
   await expect(text).resolves.toBe(true);
-  const prompt = { ...defaults, text: "Second change" };
-  await expect(afterText).resolves.toEqual({ prompt, codeBlockCopyMode: "button" });
+  await expect(afterText).resolves.toEqual(textSnapshot);
+  await expect(position).resolves.toBe(true);
+  await expect(afterPosition).resolves.toEqual(positionSnapshot);
   await staleMode;
   await staleHint;
+  await stalePosition;
   await expect(mode).resolves.toBe(true);
-  await expect(afterMode).resolves.toEqual({ prompt, codeBlockCopyMode: "off" });
-  expect(rename).toHaveBeenCalledTimes(3);
+  await expect(afterMode).resolves.toEqual({ ...positionSnapshot, codeBlockCopyMode: "off" });
+  expect(rename).toHaveBeenCalledTimes(4);
   expect(JSON.parse(await readFile(settingsFile, "utf8"))).toEqual({
     promptHintText: "Second change",
     codeBlockCopyMode: "off",
+    codeBlockCopyButtonPosition: "right",
   });
 });
 
@@ -399,17 +456,27 @@ test("awaits a rename that has started before reporting the committed save, even
     await resume.promise;
     await actual.rename(from, to);
   });
-  const pending = settings.saveCodeBlockCopyMode("click", "button", controller.signal);
+  await setDocument({ codeBlockCopyButtonPosition: "right" });
+  const pending = settings.saveCodeBlockCopyMode("button", "click", controller.signal);
   await entered.promise;
-  const queued = settings.saveCodeBlockCopyMode("button", "off", controller.signal);
+  const queued = settings.saveCodeBlockCopyMode("click", "off", controller.signal);
+  const queuedPosition = settings.saveCodeBlockCopyButtonPosition("right", "left", controller.signal);
   const cancelledRead = settings.loadPromptSettings(controller.signal);
   const read = settings.loadPromptSettings(signal);
   controller.abort();
   resume.resolve();
   await expect(pending).resolves.toBe(true);
   await expect(queued).resolves.toBe(false);
-  await expect(cancelledRead).resolves.toEqual({ prompt: defaults, codeBlockCopyMode: "off" });
-  await expect(read).resolves.toEqual({ prompt: defaults, codeBlockCopyMode: "button" });
+  await expect(queuedPosition).resolves.toBe(false);
+  await expect(cancelledRead).resolves.toEqual({ ...defaultSnapshot, codeBlockCopyMode: "off" });
+  await expect(read).resolves.toEqual({
+    ...defaultSnapshot,
+    codeBlockCopyMode: "click",
+    codeBlockCopyButtonPosition: "right",
+  });
   expect(rename).toHaveBeenCalledOnce();
-  expect(JSON.parse(await readFile(settingsFile, "utf8"))).toEqual({ codeBlockCopyMode: "button" });
+  expect(JSON.parse(await readFile(settingsFile, "utf8"))).toEqual({
+    codeBlockCopyMode: "click",
+    codeBlockCopyButtonPosition: "right",
+  });
 });

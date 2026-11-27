@@ -9,7 +9,11 @@ import {
   type TuiAltScreen,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import type { CodeBlockCopyMode } from "./settings.js";
+import {
+  type CodeBlockCopyButtonPosition,
+  type CodeBlockCopyMode,
+  DEFAULT_CODE_BLOCK_COPY_BUTTON_POSITION,
+} from "./settings.js";
 
 const parser = new Marked();
 const BUTTON = " Copy code ";
@@ -98,6 +102,7 @@ export function createCodeBlockCopy(
   const key = randomBytes(32);
   const sources = new Map<string, string>();
   let mode: CodeBlockCopyMode = "off";
+  let buttonPosition: CodeBlockCopyButtonPosition = DEFAULT_CODE_BLOCK_COPY_BUTTON_POSITION;
   let generation = 0;
   let disposed = false;
   let writing = false;
@@ -112,9 +117,7 @@ export function createCodeBlockCopy(
     pending = undefined;
   }
 
-  function setMode(next: CodeBlockCopyMode): void {
-    if (next === mode) return;
-    mode = next;
+  function resetLayout(): void {
     generation++;
     clearGesture();
     sources.clear();
@@ -122,6 +125,18 @@ export function createCodeBlockCopy(
       tui.invalidate();
       tui.requestRender();
     }
+  }
+
+  function setMode(next: CodeBlockCopyMode): void {
+    if (next === mode) return;
+    mode = next;
+    resetLayout();
+  }
+
+  function setButtonPosition(next: CodeBlockCopyButtonPosition): void {
+    if (next === buttonPosition) return;
+    buttonPosition = next;
+    if (mode === "button") resetLayout();
   }
 
   function transform(source: string, context: MarkdownTransformContext): string {
@@ -141,9 +156,10 @@ export function createCodeBlockCopy(
       (!source.includes("```") && !source.includes("~~~"))
     )
       return source;
-    const buttonEnd = Math.max(COMPACT_BUTTON.length, width - 1);
-    const buttonLabel = buttonEnd >= BUTTON.length ? BUTTON : COMPACT_BUTTON;
-    const buttonStart = buttonEnd - buttonLabel.length;
+    const buttonSpace = buttonPosition === "right" ? Math.max(COMPACT_BUTTON.length, width - 1) : width;
+    const buttonLabel = buttonSpace >= BUTTON.length ? BUTTON : COMPACT_BUTTON;
+    const buttonStart = buttonPosition === "right" ? buttonSpace - buttonLabel.length : 0;
+    const buttonEnd = buttonStart + buttonLabel.length;
     const button =
       mode === "button" ? " ".repeat(buttonStart) + theme.bg("selectedBg", theme.fg("text", buttonLabel)) : undefined;
     const normalized = source.replace(/\r\n?/g, "\n");
@@ -298,6 +314,7 @@ export function createCodeBlockCopy(
 
   return {
     setMode,
+    setButtonPosition,
     transform,
     observe,
     clearGesture,
