@@ -75,7 +75,7 @@ WebDAV and R2/S3 store `latest.json`, `history.json`, and `snapshots/` directly 
 
 ## 🧭 Manager, conflicts, and recovery
 
-The `/sync` manager opens a searchable action palette in TUI mode, with up to five visible choices and help for only the selected action. The heading identifies the active setup without relying on the summary, which can be hidden in a short terminal. The summary uses local state without contacting remote storage and shows the configured storage path:
+The `/sync` manager opens an action list in TUI mode, with up to six visible choices and help for only the selected action. The heading identifies the active setup without relying on the summary, which can be hidden in a short terminal. The summary uses local state without contacting remote storage and shows the configured storage path:
 
 ```text
 Manage sync · home
@@ -86,7 +86,7 @@ Last applied: Never synced
 
 Use **Sync…** (**Sync now** in RPC) to merge both ways. **Push to remote** uses this device's version for managed files; **Pull from remote** uses the remote version. After initial daemon handover, each choice can replace or remove managed files at the destination without a second transfer confirmation. Push preserves the previous remote version in **History**; Pull creates a local backup before applying changes. History rollback still follows the current sync rules; see [Recover excluded files from History](#recover-excluded-files-from-history) for files those rules no longer select. Use **View differences** first if you want a preview. Selecting a direction does not authorize background transfers or model use. If a file-queue release cannot be confirmed, Pi Sync attempts recovery within the same action. It does not repeat a known commit or guess when the write outcome is unknown. Use the same **Pull from remote** action to review and continue a pending ignore-rule Pull. It uses the recorded snapshot, not the latest remote snapshot. See [daemon recovery](./docs/daemon-migration.md#recover-from-uncertain-daemon-cleanup) if it cannot recover the owner.
 
-Type to filter actions; navigation scrolls the list. **Settings** and **History** are directly available. Switching appears only when multiple valid setups exist; review and access-recovery actions appear when needed.
+Use the navigation keys to select an action or scroll when more actions are available. **Settings** and **History** are directly available. Switching appears only when multiple valid setups exist; review and access-recovery actions appear when needed.
 
 The summary distinguishes cached observations, recorded background state, and the last successful background transfer; none proves current remote equality. Missing or invalid background evidence is not shown as Waiting. Automatic-transfer permissions and possible AI costs remain visible when enabled; detailed preferences stay in Settings. Setup-specific actions stay bound to the displayed setup; if its configuration changes while the menu is open, review the refreshed setup before continuing. Choose **View differences** (`/sync diff`) for a manual read of current file differences, even with Debug mode off. It does not compare changes against the last sync. Last applied shows a compact snapshot ID and states when application time is unavailable; History retains full IDs.
 

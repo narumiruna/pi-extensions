@@ -16,7 +16,7 @@ for (const [width, rows] of [
   [100, 32],
   [48, 16],
 ] as const) {
-  test(`manager search, Debug mode save and Back at ${width}×${rows}`, async () =>
+  test(`manager navigation, Settings search, Debug mode save and Back at ${width}×${rows}`, async () =>
     withTempHome(async (root) => {
       mkdirSync(root, { recursive: true });
       writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
@@ -42,8 +42,10 @@ for (const [width, rows] of [
       };
       try {
         await tui.waitForOpen();
-        tui.type("storage connections");
+        tui.press("end");
+        tui.press("tui.select.up");
         assert.match(frame(), /^→ Settings$/mu);
+        assert.doesNotMatch(frame(), /Search:/u);
         tui.press("tui.select.confirm");
         await tui.waitForOpen();
         assert.match(frame(), /^Pi Sync Settings$/mu);
@@ -68,7 +70,7 @@ for (const [width, rows] of [
         tui.press("tui.select.cancel");
         await tui.waitForPending();
         await tui.waitForOpen();
-        assert.match(frame(), /Search: > storage connections/u);
+        assert.doesNotMatch(frame(), /Search:/u);
         assert.match(frame(), /^→ Settings$/mu);
         assert.equal((await loadConfig()).debug, true);
         assert.deepEqual(routes, []);

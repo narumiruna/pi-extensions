@@ -506,7 +506,7 @@ test("History cancellation cannot interrupt a rollback after its commit boundary
     });
     try {
       await tui.waitForOpen();
-      tui.type("History");
+      tui.press("end");
       tui.press("tui.select.confirm");
       await committed;
       assert.equal(operationRoute, "history");
