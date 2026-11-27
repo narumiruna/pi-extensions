@@ -213,11 +213,28 @@ Live quota reset, accounting delay, entitlement behavior, and provider-console a
 
 ## Compaction persistence
 
-Canonical Goal state is stored in `goal-state` session entries. Before compaction, the runtime
-checkpoints active elapsed time and current safety/accounting state. Automatic compaction retries do
-not enqueue another Goal turn. Non-retrying manual compaction creates at most one fresh intent and
-uses the common idle dispatcher. Old queue metadata in `goal-state` or legacy `goals-state` entries
-is treated as inert legacy data and never dispatches automatic work.
+Canonical Goal state is stored in `goal-state` session entries. The runtime still writes the full
+objective in `goal.text` for every checkpoint. A clear writes `{ goal: null }`. The bounded serializer
+is tested but is not connected to the runtime. Enable it only in a separate release after verifying
+the published reader-only package.
+
+The reader also accepts a checkpoint that omits `goal.text` and names a full snapshot of the same
+unfinished Goal in `objectiveEntryId`. A full snapshot uses its own `goal.text` even if it has a
+reference field. The source and checkpoint must be on the same branch. Every Goal checkpoint
+between them must refer to the same source and Goal. A clear, completion, or legacy queue state
+ends the reference chain. An unresolved reference restores no Goal; it does not fall back to an
+older checkpoint.
+
+Older versions cannot read reference checkpoints. Before switching to one, use a version that
+reads references and writes full snapshots to reopen the session on the branch you need or to fork
+from the checkpoint you need. On session start, Goal appends a full checkpoint for an unfinished
+Goal. It does not rewrite historical checkpoints. Use a compatible reader to revisit a historical
+branch point with a reference checkpoint.
+
+Before compaction, the runtime checkpoints active elapsed time and current safety/accounting state.
+Automatic compaction retries do not enqueue another Goal turn. Non-retrying manual compaction
+creates at most one fresh intent and uses the common idle dispatcher. Old queue metadata in
+`goal-state` or legacy `goals-state` entries is inert and never dispatches automatic work.
 
 Goal prompts and compacted context use the same objective trust boundary, stale goal id, full-scope rule, and requirement-by-requirement completion audit.
 On idle activation, the first accepted handoff publishes its versioned hidden `goal-contract` at `before_agent_start`, after retained conversation history.
