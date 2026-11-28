@@ -26,20 +26,19 @@ for (const [direction, outcome] of [
     const signal = new AbortController().signal;
     const onCommit = () => {};
     const fingerprint = "f".repeat(64);
-    const result = await executeCommand(
-      direction,
-      context.ctx,
-      signal,
-      loaders,
-      onCommit,
-      "home",
-      undefined,
-      false,
+    const result = await executeCommand(direction, context.ctx, signal, loaders, onCommit, "home", undefined, false, {
       fingerprint,
-    );
+      intent: "reject-conflicts",
+    });
     assert.deepEqual(result, { kind: "completed", outcome });
     assert.deepEqual(run.mock.calls, [
-      [`${direction}.foreground`, { setup: "home", fingerprint }, signal, context.ctx, onCommit],
+      [
+        `${direction}.foreground`,
+        { setup: "home", fingerprint, intent: "reject-conflicts" },
+        signal,
+        context.ctx,
+        onCommit,
+      ],
     ]);
     assert.deepEqual(legacy.mock.calls, []);
     assert.deepEqual(context.notifications, [{ message, level: "info" }]);
@@ -57,6 +56,32 @@ for (const [direction, outcome] of [
       [context.ctx, direction, { ...mergeOptions, setup: "work", force: true, reload: true, signal, onCommit }],
     ]);
     assert.deepEqual(context.notifications, [{ message, level: "info" }]);
+  });
+}
+
+for (const direction of ["push", "pull"] as const) {
+  test(`an older owner cannot downgrade a guarded ${direction} request`, async () => {
+    const context = createMockContext({ mode: "rpc" });
+    const run = foreground.run.mockReset().mockImplementation(async (_operation, payload) => {
+      if (Object.keys(payload).some((key) => !["setup", "fingerprint", "retryCheckpoint"].includes(key)))
+        throw new Error("Invalid foreground directional request.");
+      assert.fail("The client fell back to the older overwrite route.");
+    });
+    const direct = vi.mocked(remoteOperation).mockReset();
+    const decision = await executeCommand(
+      direction,
+      context.ctx,
+      undefined,
+      createSyncLoaders({}),
+      undefined,
+      "home",
+      undefined,
+      false,
+      { fingerprint: "f".repeat(64), intent: "reject-conflicts" },
+    );
+    assert.deepEqual(decision, { kind: "failed" });
+    assert.equal(run.mock.calls.length, 1);
+    assert.equal(direct.mock.calls.length, 0);
   });
 }
 

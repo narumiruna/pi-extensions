@@ -59,7 +59,10 @@ test.each([
       );
     });
     const route = (_route: string, signal?: AbortSignal) =>
-      executeCommand("pull", ctx, signal, createSyncLoaders({}), undefined, "test", undefined, false, fingerprint);
+      executeCommand("pull", ctx, signal, createSyncLoaders({}), undefined, "test", undefined, false, {
+        fingerprint,
+        intent: "reject-conflicts",
+      });
     const running = tui
       ? runCancellableOperation(ctx, "Pulling…", "pull", route, { signal: session.signal, cancelledMessage: null })
       : route("pull", session.signal);

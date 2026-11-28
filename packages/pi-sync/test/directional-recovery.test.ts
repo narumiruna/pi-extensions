@@ -8,7 +8,7 @@ const replacement = {} as DaemonConnection;
 const scope = "a".repeat(64);
 const noWrite = { foregroundQueueCleanup: "before-mutation" };
 const verified = { outcome: "applied", message: "Local backup: /test/restore.json" };
-const _completed = { foregroundQueueCleanup: "verified-result", result: verified };
+const completed = { foregroundQueueCleanup: "verified-result", result: verified };
 
 function capture(checkpoint: DirectionalCheckpoint) {
   checkpoint.job = "job";
@@ -37,3 +37,18 @@ test("the same foreground action verifies a checkpoint and retries only once aft
   assert.equal(recover.mock.calls.length, 1);
   assert.equal(required.mock.calls.length, 2);
 });
+
+for (const result of [noWrite, completed]) {
+  test(`reviewed Force does not replay after ${result.foregroundQueueCleanup}`, async () => {
+    const recover = vi.fn(async () => replacement);
+    const run = vi.fn(async (checkpoint: DirectionalCheckpoint) => {
+      capture(checkpoint);
+      return result;
+    });
+    const transfer = runDirectionalRecovery(original, new AbortController().signal, run, recover, () => {}, false);
+    if (result === completed) assert.deepEqual(await transfer, verified);
+    else await assert.rejects(transfer, /Start a new review before forcing/u);
+    assert.equal(run.mock.calls.length, 1);
+    assert.equal(recover.mock.calls.length, 1);
+  });
+}

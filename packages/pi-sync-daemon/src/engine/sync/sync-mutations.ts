@@ -44,6 +44,11 @@ import {
   requireDirectionalSelection,
   validateDirectionalSettings,
 } from "./directional-action.js";
+import {
+  DirectionalDestinationConflict,
+  needsDirectionalForce,
+  recheckDirectionalReview,
+} from "./directional-conflict.js";
 import { confirmFieldMigration } from "./field-migration.js";
 import { overlayLocalFields, portableSnapshot, sameLocalFields, validatePortableSnapshot } from "./local-fields.js";
 import { readMergeJournal, requireNoMergeJournal, retireMergeJournal } from "./merge-journal.js";
@@ -222,7 +227,42 @@ export async function push(
     }
   }
 
-  if (
+  if (action?.intent) {
+    if (!head && state.lastAppliedSnapshot)
+      throw new Error("The previously synced remote snapshot is missing. Review sync recovery before publishing.");
+    const selected = (snapshot: Snapshot) => filterSnapshotForConfigPolicy(snapshot, config, snapshotOptions);
+    const conflict = needsDirectionalForce(
+      action.intent,
+      config,
+      state,
+      remoteForUpload && selected(remoteForUpload),
+      selected(upload),
+      reviewedProtectedPaths,
+    );
+    if (action.intent === "reject-conflicts" && conflict) {
+      setSyncStatus(ctx, undefined);
+      throw new DirectionalDestinationConflict();
+    }
+    if (action.intent === "review-force") {
+      if (
+        !(await confirmPush(
+          ctx,
+          options,
+          config,
+          backend,
+          local,
+          upload,
+          head,
+          remoteForUpload,
+          validateMutation,
+          "Force push?",
+        ))
+      )
+        return "cancelled" as const;
+      await validateSettings();
+      await recheckDirectionalReview(backend, head, localRaw, snapshotOptions, validateMutation);
+    }
+  } else if (
     !action &&
     !(await confirmPush(ctx, options, config, backend, local, upload, head, remoteForUpload, validateMutation))
   ) {
@@ -511,31 +551,6 @@ export async function pull(
     });
   }
 
-  const caseCleanup = action || options.yes ? [] : await inspectCaseCleanup(physical, snapshotOptions);
-  validateMutation();
-  if (
-    !action &&
-    !options.yes &&
-    !(await confirmTransferReview(
-      ctx,
-      snapshotIncludesSessions(remote) ? "Pull pi settings and sessions?" : "Pull pi settings?",
-      formatPullSummary(
-        config,
-        backend.destination,
-        local,
-        physical,
-        reviewedProtectedPaths,
-        caseCleanup.map((item) => item.path),
-      ),
-      options.signal,
-      validateMutation,
-    ))
-  ) {
-    setSyncStatus(ctx, undefined);
-    ctx.ui.notify("Pull cancelled.", "info");
-    return "cancelled" as const;
-  }
-
   const validateActionBoundary = action
     ? () =>
         requireDirectionalPullBoundary(
@@ -548,6 +563,55 @@ export async function pull(
           validateMutation,
         )
     : undefined;
+  if (action?.intent) {
+    await validateActionBoundary?.();
+    validateMutation();
+    const conflict = needsDirectionalForce(
+      action.intent,
+      config,
+      state,
+      portableSnapshot(local, config.localFields),
+      logical,
+      reviewedProtectedPaths,
+    );
+    if (action.intent === "reject-conflicts" && conflict) {
+      setSyncStatus(ctx, undefined);
+      throw new DirectionalDestinationConflict();
+    }
+  }
+  const caseCleanup = action || options.yes ? [] : await inspectCaseCleanup(physical, snapshotOptions);
+  validateMutation();
+  if (
+    ((!action && !options.yes) || action?.intent === "review-force") &&
+    !(await confirmTransferReview(
+      ctx,
+      action?.intent === "review-force"
+        ? "Force pull?"
+        : snapshotIncludesSessions(remote)
+          ? "Pull pi settings and sessions?"
+          : "Pull pi settings?",
+      formatPullSummary(
+        config,
+        backend.destination,
+        local,
+        physical,
+        reviewedProtectedPaths,
+        caseCleanup.map((item) => item.path),
+      ),
+      options.signal,
+      validateMutation,
+      action?.intent === "review-force",
+    ))
+  ) {
+    setSyncStatus(ctx, undefined);
+    ctx.ui.notify("Pull cancelled.", "info");
+    return "cancelled" as const;
+  }
+
+  if (action?.intent === "review-force") {
+    await validateActionBoundary?.();
+    await recheckDirectionalReview(backend, head, local, snapshotOptions, validateMutation);
+  }
   if (action) {
     await checkpointDirectionalAction(options, {
       direction: "pull",

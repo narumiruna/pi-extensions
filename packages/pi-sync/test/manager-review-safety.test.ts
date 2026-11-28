@@ -12,6 +12,7 @@ import { updateLocalConfig } from "../src/settings/settings-store.js";
 import type { PiSyncSettingsV3 } from "../src/settings/settings-types.js";
 import { writeStateForConfig } from "../src/state/sync-state-store.js";
 import { createSyncLoaders } from "../src/sync/sync-loaders.js";
+import type { DirectionalIntent } from "../src/ui/cancellable-operation.js";
 import { showSyncManager } from "../src/ui/manager-ui.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 import { MemorySyncBackend } from "./memory-sync-backend.js";
@@ -102,9 +103,9 @@ for (const [label, route] of setupActions) {
       const choices: Array<string | undefined> = [label, undefined];
       const context = createMockContext({ mode: "rpc", select: async () => choices.shift() });
       const fingerprint = syncCheckConfigFingerprint(await loadConfig("home"));
-      const calls: Array<{ route: string; setup?: string; retry?: boolean; fingerprint?: string }> = [];
-      await showSyncManager(context.ctx, async (actualRoute, _signal, _commit, setup, _dialog, retry, fingerprint) => {
-        calls.push({ route: actualRoute, setup, retry, fingerprint });
+      const calls: Array<{ route: string; setup?: string; retry?: boolean; directional?: DirectionalIntent }> = [];
+      await showSyncManager(context.ctx, async (actualRoute, _signal, _commit, setup, _dialog, retry, directional) => {
+        calls.push({ route: actualRoute, setup, retry, directional });
         return { kind: "completed", outcome: "cancelled" };
       });
       assert.deepEqual(calls, [
@@ -112,11 +113,49 @@ for (const [label, route] of setupActions) {
           route,
           setup: "home",
           retry: label.startsWith("Retry") ? true : undefined,
-          fingerprint: route === "push" || route === "pull" ? fingerprint : undefined,
+          directional: route === "push" || route === "pull" ? { fingerprint, intent: "reject-conflicts" } : undefined,
         },
       ]);
     });
   });
+}
+
+for (const direction of ["push", "pull"] as const) {
+  for (const stop of ["stale setup", "session replaced", "back"] as const) {
+    test(`${direction} conflict does not schedule Force after ${stop}`, () =>
+      configured(async () => {
+        const owner = new AbortController();
+        const label = direction === "push" ? "Push to remote" : "Pull from remote";
+        const review = `Review Force ${direction}…`;
+        const seen: string[][] = [];
+        const context = createMockContext({
+          mode: "rpc",
+          select: async (_title: string, choices: string[]) => {
+            seen.push(choices);
+            if (seen.length === 1) return label;
+            if (!choices.includes(review)) return undefined;
+            if (stop === "back") return "Back";
+            if (stop === "session replaced") owner.abort();
+            else await updateLocalConfig((settings) => ({ ...settings, activeSyncSetup: "work" }));
+            return review;
+          },
+        });
+        const intents: Array<DirectionalIntent | undefined> = [];
+        await showSyncManager(
+          context.ctx,
+          async (_route, _signal, _commit, _setup, _dialog, _retry, intent) => {
+            intents.push(intent);
+            return { kind: "destination-conflict" };
+          },
+          owner.signal,
+        );
+        assert.ok(seen.some((choices) => choices.includes(review)));
+        assert.deepEqual(
+          intents.map((intent) => intent?.intent),
+          ["reject-conflicts"],
+        );
+      }));
+  }
 }
 
 for (const change of ["automatic-transfer", "connection", "included-paths", "secret-scan"] as const) {

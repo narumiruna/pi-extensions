@@ -70,7 +70,7 @@ for (const outcome of ["decision", "selection"] as const)
       const fingerprints: Array<string | undefined> = [];
       await showSyncManager(context.ctx, async (route, _signal, _commit, _target, _dialog, _retry, fingerprint) => {
         routes.push(route);
-        fingerprints.push(fingerprint);
+        fingerprints.push(fingerprint?.fingerprint);
         if (route !== "conflicts") return { kind: "completed", outcome: "applied" };
         if (outcome === "selection")
           return {

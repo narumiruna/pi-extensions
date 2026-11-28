@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { type ExtensionCommandContext, initTheme, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import { type Component, StdinBuffer, visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { localConfigPath } from "../src/settings/config-file.js";
 import type { RunRoute, RunRouteResult } from "../src/ui/cancellable-operation.js";
@@ -14,8 +14,16 @@ initTheme("dark", false);
 
 const ordinaryActions = [
   { label: "Sync…", rpcLabel: "Sync now", route: "sync", description: "Merge changes on both sides." },
-  { label: "Pull from remote", route: "pull", description: "Remote → this device; replaces conflicting local files." },
-  { label: "Push to remote", route: "push", description: "This device → remote; replaces conflicting remote files." },
+  {
+    label: "Pull from remote",
+    route: "pull",
+    description: "Remote → this device; stops before overwriting local changes.",
+  },
+  {
+    label: "Push to remote",
+    route: "push",
+    description: "This device → remote; stops before overwriting remote changes.",
+  },
   { label: "View differences", route: "diff", description: "Inspect changes; no transfer." },
   { label: "Settings", route: undefined, description: "Edit settings, setups, and storage connections." },
   { label: "History", route: "history", description: "Review snapshots and recovery options." },
@@ -407,6 +415,30 @@ test("palette retains its selected row across normal, narrow, short and zero-wid
     assert.deepEqual(routes, []);
   });
 });
+
+for (const cancel of ["remapped Back", "hard Ctrl+C"] as const) {
+  test(`the conflict offer respects ${cancel} without selecting Force`, async () => {
+    await withPalette(async ({ tui, routeStarted, completeRoute, routes, running }) => {
+      tui.send("j");
+      tui.send("x");
+      assert.equal((await routeStarted).route, "pull");
+      completeRoute({ kind: "destination-conflict" });
+      await vi.waitFor(() => assert.ok(tui.render().some((line) => line.includes("Pull stopped"))));
+      assert.equal(selectedLabel(tui.render()), "Back");
+      if (cancel === "remapped Back") {
+        tui.send("q");
+        await vi.waitFor(() => assert.ok(tui.render().some((line) => line.includes("Manage sync"))));
+      } else {
+        tui.press("ctrl+c");
+        await running;
+      }
+      assert.deepEqual(
+        routes.map(({ route }) => route),
+        ["pull"],
+      );
+    }, remappedKeys());
+  });
+}
 
 for (const cancel of ["remapped Back", "hard Ctrl+C"] as const) {
   test(`${cancel} closes the main menu under non-default keybindings without routing`, async () => {

@@ -59,6 +59,7 @@ export async function runDirectionalRecovery(
   run: (checkpoint: DirectionalCheckpoint, retryCheckpoint?: string) => Promise<unknown>,
   recover: (connection: DaemonConnection, job: string, signal: AbortSignal) => Promise<DaemonConnection>,
   markCleanupRequired: () => void,
+  allowRetry = true,
 ) {
   signal.throwIfAborted();
   const attempt = new DirectionalCheckpoint(connection);
@@ -88,7 +89,8 @@ export async function runDirectionalRecovery(
     throw new Error(`No transfer was applied, but file-queue recovery stopped. ${detail}`, { cause: error });
   }
   if (primary.phase === "completed") return primary.result;
-  const retryCheckpoint = primary.phase === "unchanged" ? attempt.fingerprint : undefined;
+  if (!allowRetry) throw new Error("No transfer was applied. Start a new review before forcing the transfer.");
+  const retryCheckpoint = attempt.fingerprint;
   const retry = new DirectionalCheckpoint(replacement, retryCheckpoint);
   const retried = await run(retry, retryCheckpoint);
   const remaining = recoveryOutcome(retried);

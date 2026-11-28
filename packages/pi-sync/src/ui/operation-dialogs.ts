@@ -1,6 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-/** Track History's Pi-owned selector/confirmation lifetime without inspecting renderer internals. */
 export function trackOperationDialogs<Context extends ExtensionContext>(
   ctx: Context,
   onDialog?: (active: boolean) => void,
@@ -18,6 +17,7 @@ export function trackOperationDialogs<Context extends ExtensionContext>(
     ...ctx.ui,
     select: (...args) => runDialog(() => ctx.ui.select(...args)),
     confirm: (...args) => runDialog(() => ctx.ui.confirm(...args)),
+    custom: (factory, options) => runDialog(() => ctx.ui.custom(factory, options)),
   };
   // Forward live context properties: copying the context would hide session
   // replacement from mutation-owner revalidation after a dialog settles.

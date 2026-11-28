@@ -1,5 +1,6 @@
 import { BorderedLoader, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isKeyRelease, Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import type { ForegroundTransferIntent } from "@narumitw/pi-sync-daemon";
 import { formatInteractionHints, runCustomInteraction } from "@narumitw/pi-tui-kit";
 import type { SetupPullOutcome } from "../sync/setup-switch.js";
 import type { SyncDecision } from "../sync/sync-decision.js";
@@ -9,7 +10,13 @@ export type RunRouteResult =
   | { kind: "completed"; outcome?: SetupPullOutcome }
   | { kind: "decision-required"; decision: SyncDecision }
   | { kind: "remote-selection-required"; decision: RemoteSelectionDecision }
+  | { kind: "destination-conflict" }
   | { kind: "failed" };
+
+export interface DirectionalIntent {
+  fingerprint: string;
+  intent: ForegroundTransferIntent;
+}
 
 export type RunRoute = (
   route: string,
@@ -18,7 +25,7 @@ export type RunRoute = (
   target?: string,
   onDialog?: (active: boolean) => void,
   retryRefusal?: boolean,
-  directionalFingerprint?: string,
+  directional?: DirectionalIntent,
 ) => Promise<RunRouteResult | undefined>;
 
 export type CancellableOperationResult = RunRouteResult | { kind: "closed" } | { kind: "cancelled" };
@@ -28,7 +35,7 @@ interface CancellableOperationOptions {
   cancelAcrossDialogs?: boolean;
   cancelledMessage?: string | null;
   target?: string;
-  directionalFingerprint?: string;
+  directional?: DirectionalIntent;
   signal?: AbortSignal;
   isCurrent?: () => boolean;
 }
@@ -44,7 +51,7 @@ export async function runCancellableOperation(
     ctx,
     message,
     (signal, onCommit, onDialog) =>
-      runRoute(route, signal, onCommit, options.target, onDialog, undefined, options.directionalFingerprint),
+      runRoute(route, signal, onCommit, options.target, onDialog, undefined, options.directional),
     options,
   );
   return result.kind === "completed" ? (result.value ?? { kind: "failed" }) : result;
@@ -64,7 +71,7 @@ export async function runCancellableTask<Value>(
     onCommit?: () => void,
     onDialog?: (active: boolean) => void,
   ) => Promise<Value>,
-  options: Omit<CancellableOperationOptions, "target" | "directionalFingerprint"> = {},
+  options: Omit<CancellableOperationOptions, "target" | "directional"> = {},
 ): Promise<CancellableTaskResult<Value>> {
   const {
     commitAware = false,
