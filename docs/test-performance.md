@@ -37,6 +37,10 @@ that do not affect tests skip compilation, the artifact, and the test jobs.
 then replaces generated outputs with the same run's archived build output and compiled test support.
 This removes files created only by npm's `prepare` hook. `npm test -- --ci-shard <root|package-directory>`
 runs Vitest without rebuilding or recompiling. The projects retain their existing isolation rules.
+The `pi-illustrate` shard runs test files serially so native render subprocesses from different files
+do not compete for CPU. The five-second test limit and the worker settings for other shards and local
+`npm test` runs are unchanged.
+
 The required check named `ci` passes only when `check` and every selected test job pass. It accepts
 skips only when no work was selected for that job. If the shared artifact has expired, rerun all
 jobs so `check` can recreate it.

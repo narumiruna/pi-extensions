@@ -38,7 +38,8 @@ export function runTests({
       console.error("Missing compiled CI test inputs; restore the check job artifact first.");
       return 1;
     }
-    return runVitest([], directory);
+    // Native render suites spawn child processes and compete for CPU on hosted runners.
+    return runVitest(shard === "pi-illustrate" ? ["--no-file-parallelism"] : [], directory);
   }
   if (args.length > 0 && !prepareCI) {
     console.error("Expected no arguments, --prepare-ci, or --ci-shard <root|package-directory>.");
@@ -121,9 +122,9 @@ export function runTests({
   // Full-suite discovery belongs to Vitest's configured projects, not a Windows-sized argv inventory.
   return runVitest(selection.mode === "full" ? [] : testFiles);
 
-  function runVitest(filters, directory) {
+  function runVitest(vitestArgs, directory) {
     const canonicalTempDir = fs.realpathSync(os.tmpdir());
-    return run("Vitest", process.execPath, [vitest, "run", ...filters], {
+    return run("Vitest", process.execPath, [vitest, "run", ...vitestArgs], {
       ...env,
       PI_EXTENSIONS_TEST_DIRECTORY: directory,
       // Cache bytecode, not module instances: isolated forks keep fresh runtime state.

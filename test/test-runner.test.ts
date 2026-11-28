@@ -380,9 +380,10 @@ test("CI preparation keeps compilation failures fatal and publishes no plan", ()
   assert.equal(existsSync(output), false);
 });
 
-for (const [shard, directory] of [
-  ["root", "test"],
-  ["pi-base", "packages/pi-base/test"],
+for (const [shard, directory, vitestArgs] of [
+  ["root", "test", []],
+  ["pi-base", "packages/pi-base/test", []],
+  ["pi-illustrate", "packages/pi-illustrate/test", ["--no-file-parallelism"]],
 ] as const) {
   test(`CI shard ${shard} only runs Vitest and leaves restored inputs intact`, () => {
     mkdirSync(path.join(root, directory), { recursive: true });
@@ -392,7 +393,7 @@ for (const [shard, directory] of [
     writeFileSync(path.join(compiled, "fixture.js"), "// compiled\n");
     assert.equal(run({}, [{ status: 31 }], ["--ci-shard", shard]), 31);
     assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0]?.args, [path.join(root, "node_modules/vitest/vitest.mjs"), "run"]);
+    assert.deepEqual(calls[0]?.args, [path.join(root, "node_modules/vitest/vitest.mjs"), "run", ...vitestArgs]);
     assert.equal(calls[0]?.options.env.PI_EXTENSIONS_TEST_DIRECTORY, directory);
     assert.ok(existsSync(path.join(compiled, "fixture.js")));
   });
