@@ -41,7 +41,7 @@
   },
   "dependencies": {
     "@narumitw/pi-tui-kit": "^0.72.0",
-    "@tursodatabase/database": "0.8.3",
+    "@tursodatabase/database": "0.8.4",
     "agentfs-sdk": "0.6.4",
     "just-bash": "3.6.1"
   },
