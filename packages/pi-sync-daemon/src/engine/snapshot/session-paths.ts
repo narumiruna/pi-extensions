@@ -24,10 +24,11 @@ export function sessionDirFromContext(ctx: ExtensionCommandContext | ExtensionCo
   return typeof getSessionDir === "function" ? (getSessionDir.call(manager) as string | undefined) : undefined;
 }
 
-export async function configuredSessionDir() {
+export async function configuredSessionDir(readFile?: (file: string) => Promise<Buffer>) {
   let content: string;
   try {
-    content = await fs.readFile(path.join(agentDir(), "settings.json"), "utf8");
+    const file = path.join(agentDir(), "settings.json");
+    content = readFile ? (await readFile(file)).toString("utf8") : await fs.readFile(file, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;

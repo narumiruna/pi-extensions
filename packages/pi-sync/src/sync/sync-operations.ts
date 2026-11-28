@@ -27,8 +27,18 @@ export async function syncBoth(ctx: ExtensionContext, options: CommandOptions) {
 export async function rollback(ctx: ExtensionContext, options: CommandOptions) {
   await remoteOperation(ctx, "rollback", options);
 }
-export async function diff(ctx: ExtensionContext, options: CommandOptions) {
-  await remoteOperation(ctx, "diff", options);
+export function diff(ctx: ExtensionContext, options: CommandOptions) {
+  if (ctx.mode !== "tui" || !ctx.hasUI) return remoteOperation(ctx, "diff", options).then(() => {});
+  return Promise.all([import("../daemon/diff-review.js"), import("../ui/diff-review.js")]).then(
+    ([{ openDiffReview }, { showSyncDiffReview }]) => {
+      options.signal?.throwIfAborted();
+      return showSyncDiffReview(
+        ctx,
+        (signal) => openDiffReview(ctx, options.setup, options.diffReviewFingerprint, signal),
+        options.signal,
+      );
+    },
+  );
 }
 export async function history(ctx: ExtensionContext, options: CommandOptions) {
   await remoteOperation(ctx, "history", options);

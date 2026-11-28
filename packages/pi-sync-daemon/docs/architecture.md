@@ -67,6 +67,48 @@ Diagnostic and remote-status `notify` events set `layout: "report"`. The engine 
 
 Terminal formatting utilities are not interactive components. No daemon-owned menu, editor, or Pi custom UI is permitted. Exact review content stays data until the client renders it with its original UI and sanitization rules.
 
+## Read-only file comparisons
+
+A live TUI client starts a comparison with `connection.run("diff.review", { setup }, signal)`. Omit
+`setup` to resolve the active setup. A caller that has already reviewed the active setup can pass
+`{ setup, fingerprint }`; the daemon checks the name and `syncCheckConfigFingerprint` before any
+storage read. The legacy `diff` operation stays available and returns only a summary, including for
+RPC clients. Older daemons may reject the new operation; a caller must not silently retry with a
+less restrictive setup check.
+
+`DiffReviewInventory` is either a review ID, summary lines, and a catalog of opaque row IDs, raw paths,
+and statuses, or an `unavailable` notice. When retention or catalog limits prevent previews, the
+notice includes a bounded legacy-style summary when available. The public
+`parseDiffReviewInventory()` validates data read with the general `run()` API. Paths and text are
+untrusted display input; the caller must sanitize them for its renderer without changing row IDs.
+`readDiffReview(id, fileId, signal)` returns `DiffReviewPreview`: one local-minus/remote-plus unified
+patch, an explicit notice, or `stale`. Neither side is a proposed transfer. Only an active TUI client
+can use the review API. The comparison honors the existing snapshot selection and portable field
+rules; session and other JSONL bodies, binary or unsupported UTF-8, and settings bodies with
+mismatched local-field policies are not served. Review does not apply, publish, or modify snapshots.
+Backend reads may still use the backend's private cache.
+
+The inventory job ends before the UI chooses a file. Preview and `closeDiffReview(id, signal)` use
+separate bounded request/reply calls, not the job queue or callback ledger. A preview only reads the
+captured row and revalidates the attached owner, generation, and current setup; it does not read a
+path from the request or recapture the pair. No patch is copied into job results, events, or debug
+records. Acknowledged close is idempotent. Cancellation of the capture, owner loss, replacement,
+shutdown, and expiry release the in-memory data; clients should close the review when leaving it.
+
+The capture has a 30-second time limit. Local review scans bound selected bytes to 64 MiB and paths
+to 64 segments. Before remote policy filtering, WebDAV and S3 limit both the downloaded gzip
+artifact and its decompressed JSON to 64 MiB each. A review requires the artifact without extra HTTP
+content encoding so it can bound the response bytes. Git checks the validated manifest's total file
+size against 64 MiB before reading blobs from its cache. This does not limit what Git fetches or
+stores. A capture refusal returns `unavailable` without rerunning the legacy summary. Legacy `diff`
+and transfers keep their original limits.
+
+The catalog has at most 1,024 rows and 256 KiB of encoded metadata. A client/generation retains at
+most one review for two minutes. The daemon budgets 8 MiB per review and 32 MiB in total, with at
+most four preview reads in progress and one per owner. Preview accepts at most 64 KiB per side and limits line edit work to one
+million cells, output to 128 KiB or 2,000 lines, and requests to five seconds. Limits return notices
+instead of partial patches.
+
 ## Decision and failure matrix
 
 | Branch/equivalence class | Required outcome | Verification |
@@ -81,6 +123,9 @@ Terminal formatting utilities are not interactive components. No daemon-owned me
 | Same ID, changed input / expired result | Refuse; reconcile existing journal | Replay/eviction tests |
 | Cancel before submit / queued / waiting for review | Tombstone / abort before dispatch / abort UI callback | Cancellation tests |
 | Cancel or detach after commit | Finish existing journal/publication bookkeeping, not a second publication | Recovery tests |
+| File comparison in TUI / RPC or older client | Only TUI may capture a review; legacy `diff` stays metadata-only; patch reads never occupy the job queue | Diff review and loopback tests |
+| Remote artifact, JSON, or Git manifest payload total exceeds review cap | Refuse capture without a legacy reread; leave transfer limits and Git fetch behavior unchanged | Remote snapshot bounds tests |
+| Foreign, expired, cancelled, released, replaced, or changed-setup file review | No patch; do not recapture automatically or expose body data in an error | Diff review ownership, setup, limit, and cancellation tests |
 | Active sessions in two clients | Protect their union, including alternate session roots | Multi-client apply tests |
 | Lost connection with live PID / timeout | Retain protection and queue uncertainty; not proof of exit | Ambiguous-disconnection tests |
 | Confirmed daemon exit | Release quarantined Pi grants only after ESRCH | Apply-gate tests |

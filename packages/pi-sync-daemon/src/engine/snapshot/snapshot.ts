@@ -6,6 +6,7 @@ import path from "node:path";
 import { isDeniedPath, posixJoin, safeJoin, toPosix } from "../paths.js";
 import { agentDir, configuredSessionDir, expandSessionDir } from "./session-paths.js";
 import { assertAgentDirectorySettingsSize, MAX_AGENT_DIRECTORY_BYTES } from "./snapshot-bounds.js";
+import { SnapshotCaptureLimitError, type SnapshotCaptureLimits } from "./snapshot-capture-limit.js";
 import {
   agentDirectoryAnchor,
   agentDirectoryPhysicalSessionPath,
@@ -127,6 +128,7 @@ function materializeSnapshotFile(filePath: string, content: Buffer): SnapshotFil
 async function collectSnapshotFiles<T extends { path: string }>(
   options: SnapshotOptions,
   materialize: MaterializeFile<T>,
+  limits?: SnapshotCaptureLimits,
 ) {
   options.signal?.throwIfAborted();
   const include = effectiveInclude(options);
@@ -137,9 +139,12 @@ async function collectSnapshotFiles<T extends { path: string }>(
   const sessionDir =
     options.scope === "agent-directory"
       ? options.sessionDir
-      : (options.sessionDir ?? (needsSessionConfig ? await configuredSessionDir() : undefined));
+      : (options.sessionDir ??
+        (needsSessionConfig
+          ? await configuredSessionDir(limits && ((file) => limits.readFile(file, options.signal)))
+          : undefined));
   options.signal?.throwIfAborted();
-  const collectionOptions = { ...policy, sessionDir };
+  const collectionOptions = { ...policy, sessionDir, limits };
   const collected =
     options.scope === "agent-directory"
       ? await collectAgentDirectory(agentDir(), collectionOptions, materialize)
@@ -180,8 +185,16 @@ export function snapshotWithObservedInventory(snapshot: Snapshot, observation: S
   return refreshed;
 }
 
-export async function createSnapshot(profile: string, options: SnapshotOptions = {}): Promise<Snapshot> {
-  const { files, inventory, include, syncSessions } = await collectSnapshotFiles(options, materializeSnapshotFile);
+export async function createSnapshot(
+  profile: string,
+  options: SnapshotOptions = {},
+  limits?: SnapshotCaptureLimits,
+): Promise<Snapshot> {
+  const { files, inventory, include, syncSessions } = await collectSnapshotFiles(
+    options,
+    materializeSnapshotFile,
+    limits,
+  );
   options.signal?.throwIfAborted();
   const selection = selectionForSnapshot(include, options.exclude, options);
   const snapshot: Snapshot = {
@@ -220,15 +233,15 @@ export async function collectFiles(
 
 async function collectSelectedFiles<T extends { path: string }>(
   root: string,
-  options: SnapshotOptions,
+  options: SnapshotOptions & { limits?: SnapshotCaptureLimits },
   excluded: (relativePath: string) => boolean,
   materialize: MaterializeFile<T>,
 ) {
-  const signal = options.signal;
-  const collection = { signal, excluded, materialize };
+  const { signal, limits } = options;
+  const collection = { signal, excluded, materialize, limits };
   signal?.throwIfAborted();
   const results: T[] = [];
-  const entries = await fs.readdir(root, { withFileTypes: true });
+  const entries = await (limits ? limits.readEntries(root, signal) : fs.readdir(root, { withFileTypes: true }));
   signal?.throwIfAborted();
   const selection = syncIncludeSelection(effectiveInclude(options));
   const selectedFiles = new Set<string>(selection.builtIns);
@@ -383,7 +396,7 @@ export async function scanAgentDirectoryInventory(
 
 async function collectAgentDirectory<T extends { path: string }>(
   root: string,
-  options: AgentDirectoryScanOptions,
+  options: AgentDirectoryScanOptions & { limits?: SnapshotCaptureLimits },
   materialize?: MaterializeFile<T>,
   pendingStateEntry?: string,
 ) {
@@ -400,6 +413,8 @@ async function collectAgentDirectory<T extends { path: string }>(
   let bytes = 0;
 
   async function walk(directory: ScannedPath, prefix: string, sessions: boolean) {
+    if (options.limits && prefix && prefix.split("/").length >= options.limits.maxDepth)
+      throw new SnapshotCaptureLimitError();
     if (!directory.stat.isDirectory()) changedScan();
     directories.push(directory);
     const children: Dirent[] = [];
@@ -509,6 +524,7 @@ type LegacyCollectionOptions<T> = {
   sessionsOnly?: boolean;
   virtualPrefix?: string;
   signal?: AbortSignal;
+  limits?: SnapshotCaptureLimits;
   excluded: (relativePath: string) => boolean;
 };
 
@@ -529,7 +545,9 @@ async function collectIncludedPath<T>(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     if (!relativePath.includes("/")) {
-      const entries = await fs.readdir(root, { withFileTypes: true });
+      const entries = await (options.limits
+        ? options.limits.readEntries(root, signal)
+        : fs.readdir(root, { withFileTypes: true }));
       signal?.throwIfAborted();
       const entry = selectTopLevelFileEntry(entries, relativePath);
       if (entry) await addFile(results, root, entry.name, relativePath, options);
@@ -544,9 +562,14 @@ async function collectDirectory<T>(
   options: LegacyCollectionOptions<T>,
 ) {
   options.signal?.throwIfAborted();
+  const prefix = posixJoin(options.virtualPrefix ?? "", relativeDirectory);
+  if (options.limits && prefix && prefix.split("/").length >= options.limits.maxDepth)
+    throw new SnapshotCaptureLimitError();
   const absoluteDirectory = path.join(root, relativeDirectory);
-  options.signal?.throwIfAborted();
-  for (const entry of await fs.readdir(absoluteDirectory, { withFileTypes: true })) {
+  const entries = await (options.limits
+    ? options.limits.readEntries(absoluteDirectory, options.signal)
+    : fs.readdir(absoluteDirectory, { withFileTypes: true }));
+  for (const entry of entries) {
     options.signal?.throwIfAborted();
     const relativePath = relativeDirectory ? posixJoin(relativeDirectory, entry.name) : entry.name;
     const snapshotPath = options.virtualPrefix ? posixJoin(options.virtualPrefix, relativePath) : relativePath;
@@ -564,12 +587,13 @@ async function addFile<T>(
   root: string,
   relativePath: string,
   snapshotPath: string,
-  { signal, materialize }: LegacyCollectionOptions<T>,
+  { signal, materialize, limits }: LegacyCollectionOptions<T>,
 ) {
   signal?.throwIfAborted();
   if (!isSafeSnapshotPath(snapshotPath)) return;
+  if (limits && snapshotPath.split("/").length > limits.maxDepth) throw new SnapshotCaptureLimitError();
   const absolutePath = safeJoin(root, relativePath);
-  const content = await fs.readFile(absolutePath, { signal });
+  const content = await (limits ? limits.readFile(absolutePath, signal) : fs.readFile(absolutePath, { signal }));
   signal?.throwIfAborted();
   results.push(materialize(snapshotPath, content));
 }

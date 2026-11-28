@@ -10,7 +10,7 @@ import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
 import { errorMessage, isSyncDecisionRequiredError, SetupPullRequiresUiError } from "../sync/sync-errors.js";
 import type { SyncLoaders } from "../sync/sync-loaders.js";
 import { RemoteSelectionMismatchError } from "../sync/sync-policy.js";
-import type { DirectionalIntent, RunRouteResult } from "../ui/cancellable-operation.js";
+import type { DirectionalIntent, RunRouteIntent, RunRouteResult } from "../ui/cancellable-operation.js";
 import { trackOperationDialogs } from "../ui/operation-dialogs.js";
 import { setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
@@ -79,9 +79,10 @@ export async function executeCommand(
   setup?: string,
   onDialog?: (active: boolean) => void,
   retryRefusal = false,
-  directional?: DirectionalIntent,
+  intent?: RunRouteIntent,
 ): Promise<RunRouteResult> {
   ctx = trackOperationDialogs(ctx, onDialog);
+  const directional = intent?.intent === "read-diff" ? undefined : intent;
   try {
     const directionalClient = directional === undefined ? undefined : piDaemonClient(ctx);
     const command = await resolveSyncCommand(rawArgs, ctx);
@@ -102,6 +103,10 @@ export async function executeCommand(
     if (signal) options.signal = signal;
     if (onCommit) options.onCommit = onCommit;
     validateCommandOptions(subcommand, options);
+    if (intent?.intent === "read-diff") {
+      if (subcommand !== "diff" || !setup || rest.length) throw new Error("Invalid diff review action.");
+      options.diffReviewFingerprint = intent.fingerprint;
+    }
     if (retryRefusal) throw new Error("Model retries are no longer supported. Use reviewed manual sync.");
 
     switch (subcommand) {
@@ -156,8 +161,8 @@ export async function executeCommand(
       case "diff": {
         const operations = await loaders.operations();
         throwIfAborted(options.signal);
-        await operations.diff(ctx, options);
-        return { kind: "completed" };
+        const result = await operations.diff(ctx, options);
+        return { kind: result === "close" ? "closed" : "completed" };
       }
       case "conflicts": {
         const { showConflicts } = await import("../sync/conflict-review.js");

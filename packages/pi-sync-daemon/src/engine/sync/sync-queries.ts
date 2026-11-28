@@ -11,6 +11,7 @@ import {
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import { resolvedSnapshotOptionsForContext } from "../snapshot/session-paths.js";
 import { createSnapshot, scanSnapshot } from "../snapshot/snapshot.js";
+import type { SnapshotCaptureLimits } from "../snapshot/snapshot-capture-limit.js";
 import type { SnapshotOptions } from "../snapshot/snapshot-types.js";
 import { inspectLock, isLockGuardHeld, isStaleLock, withLock } from "../state/lock.js";
 import { readStateForConfig } from "../state/sync-state-store.js";
@@ -122,33 +123,61 @@ export async function diff(
   const config = await loadConfig(options.setup);
   throwIfAborted(options.signal);
   setSyncStatus(ctx, `checking ${config.setupName}`, { activity: "checking" });
-  const backend = await factory(config);
-  const snapshotOptions = await resolvedSnapshotOptionsForContext(ctx, config, options.signal);
-  const local = portableSnapshot(await createSnapshot(config.snapshotIdentity, snapshotOptions), config.localFields);
-  throwIfAborted(options.signal);
-  const { snapshot: remote, selectionState } = await readRemoteSnapshot(backend, config, options.signal, {
-    allowSelectionDifference: true,
-    sessionDir: snapshotOptions.sessionDir,
-  });
-  throwIfAborted(options.signal);
+  const { local, remote, lines, warnings, selectionState } = await captureDiffComparison(
+    ctx,
+    config,
+    options.signal,
+    factory,
+  );
   setSyncStatus(ctx, undefined);
 
-  const warnings = syncSessionsWarnings(config);
-  const header = [
-    `sync setup: ${config.setupName}`,
-    `storage connection: ${config.connectionName}`,
-    `storage location: ${safeTerminalText(backend.destination)}`,
-    ...contentLines(config),
-    formatRemoteSelectionStatus(selectionState),
-    ...warnings,
-  ].join("\n");
+  const header = lines.join("\n");
   const level = warnings.length > 0 || selectionState?.kind === "different" ? "warning" : "info";
   if (!remote) {
     ctx.ui.notify(`${header}\n\n${formatSnapshotOnlyDiff("Remote is empty. Local push would upload", local)}`, level);
     return;
   }
 
-  ctx.ui.notify(`${header}\n\n${formatDiff(local, portableSnapshot(remote, remote.localFields))}`, level);
+  ctx.ui.notify(`${header}\n\n${formatDiff(local, remote)}`, level);
+}
+
+export async function captureDiffComparison(
+  ctx: ExtensionCommandContext,
+  config: AnySyncConfig,
+  signal?: AbortSignal,
+  factory: SyncBackendFactory = createSyncBackend,
+  limits?: { local: SnapshotCaptureLimits; remoteBytes: number },
+) {
+  const backend = await factory(config);
+  throwIfAborted(signal);
+  const snapshotOptions = await resolvedSnapshotOptionsForContext(ctx, config, signal);
+  throwIfAborted(signal);
+  const local = portableSnapshot(
+    await createSnapshot(config.snapshotIdentity, snapshotOptions, limits?.local),
+    config.localFields,
+  );
+  throwIfAborted(signal);
+  const { snapshot: remote, selectionState } = await readRemoteSnapshot(backend, config, signal, {
+    allowSelectionDifference: true,
+    sessionDir: snapshotOptions.sessionDir,
+    maxBytes: limits?.remoteBytes,
+  });
+  throwIfAborted(signal);
+  const warnings = syncSessionsWarnings(config);
+  return {
+    local,
+    remote: remote && portableSnapshot(remote, remote.localFields),
+    warnings,
+    selectionState,
+    lines: [
+      `sync setup: ${config.setupName}`,
+      `storage connection: ${config.connectionName}`,
+      `storage location: ${safeTerminalText(backend.destination)}`,
+      ...contentLines(config),
+      ...formatRemoteSelectionStatus(selectionState).split("\n"),
+      ...warnings,
+    ],
+  };
 }
 
 export async function doctor(

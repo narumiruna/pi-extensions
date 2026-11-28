@@ -7,6 +7,8 @@ import lockfile from "proper-lockfile";
 import { DAEMON_BUILD_ID, DAEMON_BUILD_VERSION } from "./build-version.js";
 import { ConsentPublicationError, readConsent } from "./consent.js";
 import type { DaemonDiagnosticSink } from "./daemon-debug.js";
+import { handleDiffReviewRequest } from "./diff-review-rpc.js";
+import { createDiffReviewStore } from "./diff-review-store.js";
 import { endpointOwner } from "./endpoint.js";
 import { debugJobResult, debugOperation } from "./engine/debug-log.js";
 import { SyncDecisionRequiredError } from "./engine/sync/sync-errors.js";
@@ -69,6 +71,7 @@ interface Participant {
   seen: number;
   publishing?: boolean;
   reviewDetails?: boolean;
+  diffReviewOwner?: AbortController;
   handoff?: ClientHandoff;
   // This instance's expiry episode; never restored from clients.json.
   expiry?: AbortController;
@@ -163,6 +166,14 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     hooks.failure?.();
   };
   const participants = new Map<string, Participant>();
+  const diffReviews = createDiffReviewStore();
+  const invalidateDiffReview = (peer: Participant) => {
+    const owner = peer.diffReviewOwner;
+    if (!owner) return;
+    peer.diffReviewOwner = undefined;
+    diffReviews.release(owner);
+    owner.abort(new DOMException("File review owner changed", "AbortError"));
+  };
   const waiters = new WeakMap<Participant, ParticipantStateWait>();
   const admission = new ParticipantAdmission();
   const jobs = new Map<string, Job>();
@@ -286,7 +297,10 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     ),
     job: job?.view,
   });
-  function makeExecution(job: Job): Execution {
+  function makeExecution(job: Job, diffReviewOwner?: AbortController): Execution {
+    const signal = diffReviewOwner
+      ? AbortSignal.any([job.controller.signal, diffReviewOwner.signal])
+      : job.controller.signal;
     const validate = () => {
       if (compromised) throw new Error("Daemon ownership is no longer valid.");
       // Finish journal/publication bookkeeping after commit even if a UI detaches or stop begins.
@@ -295,15 +309,16 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         return;
       }
       assertOwner();
-      job.controller.signal.throwIfAborted();
+      signal.throwIfAborted();
       if (job.participantGeneration !== undefined && job.participantGeneration !== participantGeneration)
         throw new Error("Daemon participants changed before automatic work completed.");
       if (job.client) {
         const peer = requireParticipant(job.client);
-        if (peer.facts.generation !== job.generation) throw new Error("Client session generation changed.");
+        if (peer.facts.generation !== job.generation || (diffReviewOwner && peer.diffReviewOwner !== diffReviewOwner))
+          throw new Error("Client session generation changed.");
       }
     };
-    const request = (kind: string, data: unknown, target = job.client, signal = job.controller.signal) => {
+    const request = (kind: string, data: unknown, target = job.client, requestSignal = signal) => {
       const cleanup = kind === "queue-release";
       if (!cleanup) validate();
       if (!target) throw new Error("This operation requires an attached UI client.");
@@ -354,7 +369,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       }
       return new Promise<unknown>((resolve, reject) => {
         let timer: ReturnType<typeof setTimeout> | undefined;
-        const effectiveSignal = cleanup ? undefined : signal;
+        const effectiveSignal = cleanup ? undefined : requestSignal;
         const abort = () => finish(undefined, effectiveSignal?.reason);
         const finish = (value: unknown, error?: unknown) => {
           if (timer) clearTimeout(timer);
@@ -401,7 +416,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     return {
       root: paths.root,
       clientId: job.client,
-      signal: job.controller.signal,
+      signal,
       facts: () => (job.client ? participants.get(job.client)?.facts : undefined),
       participants: participantFacts,
       liveClients: liveClientFacts,
@@ -411,9 +426,21 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
             validate();
             return action(participantFacts());
           },
-          job.committed ? undefined : job.controller.signal,
+          job.committed ? undefined : signal,
         ),
       validate,
+      ...(diffReviewOwner && {
+        diffReview: {
+          clear() {
+            validate();
+            diffReviews.release(diffReviewOwner);
+          },
+          retain(prepared) {
+            validate();
+            return diffReviews.retain(diffReviewOwner, prepared, signal);
+          },
+        },
+      }),
       request,
       emit: (kind, data, target = job.client) => emit(kind, data, target),
       debug:
@@ -476,7 +503,12 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     };
     if (cancelled.has(`${client}:${id}`))
       job.controller.abort(new DOMException("Operation cancelled before dispatch", "AbortError"));
-    const execution = makeExecution(job);
+    let diffReviewOwner: AbortController | undefined;
+    if (operation === "diff.review" && peer.facts.mode === "tui" && peer.facts.hasUI) {
+      peer.diffReviewOwner ??= new AbortController();
+      diffReviewOwner = peer.diffReviewOwner;
+    }
+    const execution = makeExecution(job, diffReviewOwner);
     const kind = debug && debugOperation(operation);
     const waitForInspectionLog = kind === "inspect";
     const note = (
@@ -525,6 +557,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         if (waitForInspectionLog && logged) await logged;
         job.view.phase = "failed";
         job.view.error = remoteError(error);
+        if (diffReviewOwner) job.controller.abort();
         if (job.committed)
           for (const id of new Set([client, ...job.peers])) {
             const affected = participants.get(id);
@@ -698,6 +731,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     }
     if (closedClients.has(id)) return poll(peer, 0);
     peer.closing = true;
+    invalidateDiffReview(peer);
     participantsChanged();
     invalidateExpiry(peer);
     for (const waiting of [...pending.values()])
@@ -878,8 +912,12 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         if (closedClients.size >= 10_000)
           throw new Error("Client retirement ledger is full; stop and restart the service.");
         if (!processExists(params.pid)) throw new Error("Client process is not alive.");
-        for (const [id, peer] of participants)
-          if (!processExists(peer.facts.pid) && !peer.callbacks.size) participants.delete(id);
+        for (const [id, peer] of participants) {
+          if (!processExists(peer.facts.pid) && !peer.callbacks.size) {
+            invalidateDiffReview(peer);
+            participants.delete(id);
+          }
+        }
         if (!participants.has(params.id) && participants.size >= 64) throw new Error("Daemon client capacity reached.");
         const old = participants.get(params.id);
         if (
@@ -888,7 +926,10 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
             ((old.connected || old.suspected) && old.facts.generation !== params.generation))
         )
           throw new Error("Client identity collision.");
-        if (old) invalidateExpiry(old);
+        if (old) {
+          invalidateExpiry(old);
+          invalidateDiffReview(old);
+        }
         participantsChanged();
         participants.set(params.id, {
           facts: structuredClone(params),
@@ -926,6 +967,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
                 ? next.sessionId === params.sessionId
                 : params.sessionFile === undefined && next.cwd === params.cwd;
           if (matches) {
+            invalidateDiffReview(peer);
             participants.delete(id);
             closedClients.add(id);
           }
@@ -982,7 +1024,17 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         throw new Error("Client generation mismatch.");
       if (contactState(peer) === "expired") throw new ClientContactExpiredError();
       requireParticipant(params.facts.id);
-      peer.facts = structuredClone(params.facts);
+      const next = params.facts;
+      if (
+        old.mode !== next.mode ||
+        old.hasUI !== next.hasUI ||
+        old.cwd !== next.cwd ||
+        old.sessionId !== next.sessionId ||
+        old.sessionDir !== next.sessionDir ||
+        old.sessionFile !== next.sessionFile
+      )
+        invalidateDiffReview(peer);
+      peer.facts = structuredClone(next);
       const published = peer.facts;
       const unchanged = JSON.stringify(old) === JSON.stringify(published);
       if (!unchanged) participantsChanged();
@@ -1119,6 +1171,18 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     if (method === "stop") return stop();
     throw new Error("Unknown daemon method.");
   }
+  const diffReviewOwner = (client: string, generation: string) => {
+    const peer = participants.get(client);
+    if (
+      peer &&
+      peer.facts.generation === generation &&
+      peer.facts.mode === "tui" &&
+      peer.facts.hasUI &&
+      contactState(peer) === "active" &&
+      Date.now() - peer.seen <= 5_000
+    )
+      return peer.diffReviewOwner;
+  };
   const respond = (response: ServerResponse, status: number, value: unknown) => {
     let encoded = JSON.stringify(value);
     if (Buffer.byteLength(encoded) > MAX_MESSAGE_BYTES) {
@@ -1157,6 +1221,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
           "resume-contact",
           "startup.bootstrap",
           "state-wait",
+          "diff-review-read",
           "foreground-stop",
           "upgrade-stop",
         ].includes(body.method)
@@ -1164,6 +1229,23 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         admissionController = new AbortController();
         response.once("close", disconnect);
         if (response.destroyed) disconnect();
+      }
+      if (body.method === "diff-review-read" || body.method === "diff-review-close") {
+        if (!published) throw new Error("Daemon readiness is not published.");
+        assertOwner();
+        if (!record(body.params)) throw new Error("Invalid diff review request.");
+        await handleDiffReviewRequest(
+          body.method,
+          body.params,
+          admissionController?.signal,
+          diffReviews,
+          diffReviewOwner,
+          assertOwner,
+          (result) => {
+            if (!response.destroyed) respond(response, 200, { result });
+          },
+        );
+        return;
       }
       const operation = handle(body.method, body.params, admissionController?.signal, body.reviewDetails === 1);
       if (
@@ -1225,6 +1307,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       const exited = !processExists(peer.facts.pid);
       if (!exited && (!peer.connected || Date.now() - peer.seen <= 5_000)) continue;
       participationChanged ||= participates(peer);
+      invalidateDiffReview(peer);
       peer.connected = false;
       peer.suspected = !exited;
       if (exited) invalidateExpiry(peer);
@@ -1306,6 +1389,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
     if (closing) return closing;
     closing = (async () => {
       closed = true;
+      diffReviews.close();
       for (const peer of participants.values()) {
         invalidateExpiry(peer);
         waiters.get(peer)?.changed();

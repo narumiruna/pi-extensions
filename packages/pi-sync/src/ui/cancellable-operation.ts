@@ -1,5 +1,5 @@
 import { BorderedLoader, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { isKeyRelease, Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { getKeybindings, isKeyRelease, Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import type { ForegroundTransferIntent } from "@narumitw/pi-sync-daemon";
 import { formatInteractionHints, runCustomInteraction } from "@narumitw/pi-tui-kit";
 import type { SetupPullOutcome } from "../sync/setup-switch.js";
@@ -11,12 +11,15 @@ export type RunRouteResult =
   | { kind: "decision-required"; decision: SyncDecision }
   | { kind: "remote-selection-required"; decision: RemoteSelectionDecision }
   | { kind: "destination-conflict" }
+  | { kind: "closed" }
   | { kind: "failed" };
 
 export interface DirectionalIntent {
   fingerprint: string;
   intent: ForegroundTransferIntent;
 }
+
+export type RunRouteIntent = DirectionalIntent | { intent: "read-diff"; fingerprint: string };
 
 export type RunRoute = (
   route: string,
@@ -25,14 +28,15 @@ export type RunRoute = (
   target?: string,
   onDialog?: (active: boolean) => void,
   retryRefusal?: boolean,
-  directional?: DirectionalIntent,
+  intent?: RunRouteIntent,
 ) => Promise<RunRouteResult | undefined>;
 
-export type CancellableOperationResult = RunRouteResult | { kind: "closed" } | { kind: "cancelled" };
+export type CancellableOperationResult = RunRouteResult | { kind: "cancelled" };
 
 interface CancellableOperationOptions {
   commitAware?: boolean;
   cancelAcrossDialogs?: boolean;
+  closeOnHardCancel?: boolean;
   cancelledMessage?: string | null;
   target?: string;
   directional?: DirectionalIntent;
@@ -62,6 +66,8 @@ export type CancellableTaskResult<Value> =
   | { kind: "closed" }
   | { kind: "cancelled" };
 
+type TaskInteraction = { cancelled?: "back" | "close"; error?: unknown };
+
 /** Keep non-route work under the same cancellation and drain owner as transfers. */
 export async function runCancellableTask<Value>(
   ctx: ExtensionContext,
@@ -76,6 +82,7 @@ export async function runCancellableTask<Value>(
   const {
     commitAware = false,
     cancelAcrossDialogs = false,
+    closeOnHardCancel = false,
     cancelledMessage = "Check cancelled; no settings or files were changed.",
     signal,
     isCurrent = () => true,
@@ -84,24 +91,36 @@ export async function runCancellableTask<Value>(
   if (ctx.mode !== "tui") return { kind: "completed", value: await task(signal) };
   let commitStarted = false;
   let taskResult!: Value;
-  const interaction = await runCustomInteraction<{ cancelled?: boolean; error?: unknown }, ExtensionContext>(ctx, {
+  const interaction = await runCustomInteraction<TaskInteraction, ExtensionContext>(ctx, {
     signal,
     isCurrent: () => !signal?.aborted && isCurrent(),
     create: ({ tui, theme, keybindings, signal: interactionSignal, complete }) => {
+      if (
+        closeOnHardCancel &&
+        tui.mode === "fullscreen" &&
+        ["\u0003", "\u001b[99;5u"].some((input) => getKeybindings().matches(input, "tui.altScreen.search"))
+      ) {
+        ctx.ui.notify("Fullscreen search uses Ctrl+C. Change that binding before opening View differences.", "warning");
+        complete({ cancelled: "close" });
+        return { render: () => [], invalidate() {} };
+      }
       const loader = new BorderedLoader(tui, theme, message, { cancellable: false });
       const cancelHint = formatInteractionHints(keybindings, [
-        {
-          keys: [...keybindings.getKeys("tui.select.cancel").filter((key) => !hasControlCharacter(key)), "ctrl+c"],
-          label: "cancel",
-        },
+        closeOnHardCancel
+          ? { keys: ["ctrl+c"], label: "close" }
+          : {
+              keys: [...keybindings.getKeys("tui.select.cancel").filter((key) => !hasControlCharacter(key)), "ctrl+c"],
+              label: "cancel",
+            },
       ]);
       const cancel = (data: string) => {
         // Raw terminal listeners run before Pi filters Kitty key releases.
         if (isKeyRelease(data)) return false;
-        if (!matchesKey(data, Key.ctrl("c")) && !keybindings.matches(data, "tui.select.cancel")) return false;
+        const hardCancel = matchesKey(data, Key.ctrl("c"));
+        if (!hardCancel && !keybindings.matches(data, "tui.select.cancel")) return false;
         if (commitStarted) {
           ctx.ui.notify("Applying or publishing has started and cannot be cancelled safely.", "warning");
-        } else complete({ cancelled: true });
+        } else complete({ cancelled: closeOnHardCancel && hardCancel ? "close" : "back" });
         return true;
       };
       // Pi dialogs replace this loader and restore the normal editor. Defer
@@ -151,6 +170,7 @@ export async function runCancellableTask<Value>(
           ];
         },
         invalidate: () => loader.invalidate(),
+        capturesViewportInput: closeOnHardCancel,
         handleInput: cancel,
         dispose() {
           unsubscribe?.();
@@ -162,7 +182,8 @@ export async function runCancellableTask<Value>(
   });
   if (interaction.kind === "error") throw interaction.error;
   if (interaction.kind !== "completed") return { kind: "closed" };
-  if (interaction.value.cancelled) {
+  if (interaction.value.cancelled === "close") return { kind: "closed" };
+  if (interaction.value.cancelled === "back") {
     if (cancelledMessage) ctx.ui.notify(cancelledMessage, "info");
     return { kind: "cancelled" };
   }

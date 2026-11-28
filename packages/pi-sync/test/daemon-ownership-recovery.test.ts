@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { type ExtensionCommandContext, initTheme } from "@earendil-works/pi-coding-agent";
 import {
   DaemonConnection,
   DaemonError,
@@ -9,6 +9,7 @@ import {
   findDaemon,
   OWNERSHIP_CLEANUP_REQUIRED,
 } from "@narumitw/pi-sync-daemon";
+import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { v3WebDavSettings, withTempHome } from "./helpers.js";
@@ -17,7 +18,7 @@ initTheme("dark", false);
 
 test.each([
   ["initialize", "rpc"],
-  ["diff", "tui"],
+  ["diff.review", "tui"],
 ] as const)("the %s failure exposes daemon recovery without another engine job (%s)", (operation, mode) =>
   withTempHome(async (root) => {
     await fs.mkdir(root, { recursive: true });
@@ -63,7 +64,20 @@ test.each([
       await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, ctx);
       const command = mock.commands.get("sync");
       assert.ok(command);
-      if (operation === "diff") await command.handler("diff", ctx);
+      if (operation === "diff.review") {
+        const tui = createTuiHarness();
+        const ui = (ctx as ExtensionCommandContext).ui;
+        const custom = ui.custom;
+        ui.custom = tui.custom;
+        try {
+          await command.handler("diff", ctx);
+          assert.equal(tui.isOpen, false);
+        } finally {
+          ui.custom = custom;
+          tui.dispose();
+        }
+      }
+      assert.ok(jobs.includes(operation));
       assert.ok(notifications.some((event) => /open \/sync/iu.test(event.message)));
       const owner = (await findDaemon(root))?.identity;
       assert.ok(owner);

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { posixJoin } from "../../paths.js";
+import { SnapshotCaptureLimitError } from "../../snapshot/snapshot-capture-limit.js";
 import { snapshotFileFromBlob } from "../../snapshot/snapshot-payload.js";
 import type { Snapshot, SnapshotFile } from "../../snapshot/snapshot-types.js";
 import { stateDir } from "../../state/state-directory.js";
@@ -108,21 +109,21 @@ export class GitSyncBackend implements SyncBackend {
     return this.headForSha(sha, signal);
   }
 
-  async readHeadAndSnapshot(signal?: AbortSignal) {
+  async readHeadAndSnapshot(signal?: AbortSignal, maxBytes?: number) {
     const commit = await this.fetchRemoteHead(signal);
     if (!commit) return undefined;
     const publication = await this.readCachedPublication(commit, signal);
     await this.requireReachablePublication(commit, commit, undefined, signal);
-    const snapshot = await this.readPublicationSnapshot(publication, signal);
+    const snapshot = await this.readPublicationSnapshot(publication, signal, maxBytes);
     return { head: remoteHead(commit, publication.manifest, this.identity), snapshot };
   }
 
-  async readSnapshot(reference: string, signal?: AbortSignal): Promise<Snapshot> {
+  async readSnapshot(reference: string, signal?: AbortSignal, maxBytes?: number): Promise<Snapshot> {
     const head = await this.fetchRemoteHead(signal);
     if (!head) throw new Error(`Git snapshot publication was not found: ${reference}`);
     const commit = await this.resolveSnapshotReference(reference, head, signal);
     await this.requireReachablePublication(reference, commit, head, signal);
-    return this.readPublicationSnapshot(await this.readCachedPublication(commit, signal), signal);
+    return this.readPublicationSnapshot(await this.readCachedPublication(commit, signal), signal, maxBytes);
   }
 
   private async requireReachablePublication(reference: string, commit: string, head?: string, signal?: AbortSignal) {
@@ -138,7 +139,10 @@ export class GitSyncBackend implements SyncBackend {
   private async readPublicationSnapshot(
     { manifest, payloadEntries }: GitPublication,
     signal?: AbortSignal,
+    maxBytes?: number,
   ): Promise<Snapshot> {
+    const payloadBytes = manifest.files.reduce((total, file) => total + file.size, 0);
+    if (maxBytes !== undefined && payloadBytes > maxBytes) throw new SnapshotCaptureLimitError();
     let blobs: Buffer[];
     try {
       blobs = await readGitBlobs(
@@ -148,7 +152,7 @@ export class GitSyncBackend implements SyncBackend {
           signal,
           timeoutMs: this.commandTimeoutMs,
           allowFileProtocol: this.allowLocalRemotes,
-          maxOutputBytes: manifest.files.reduce((total, file) => total + file.size, 0),
+          maxOutputBytes: payloadBytes,
         },
       );
     } catch (error) {

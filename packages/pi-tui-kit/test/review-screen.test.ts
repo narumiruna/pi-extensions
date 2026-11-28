@@ -671,6 +671,17 @@ test("diff tab expansion includes changed and context prefixes in the tab column
   assert.deepEqual(lines, ["toolDiffRemoved:-   ⟦old⟧", "toolDiffAdded:+   ⟦new⟧", "toolDiffContext:    context"]);
 });
 
+test("a tab-heavy diff line can wrap into more rows than a JavaScript argument list at width one", () => {
+  const count = 40_000;
+  const lines = formatDocumentLines(`+${"\t".repeat(count)}x`, { kind: "diff" }, 1, {
+    fg: (_role, text) => text,
+    bold: (text) => text,
+  });
+  assert.equal(lines.length, 4 * count + 1);
+  assert.equal(lines[0], "+");
+  assert.equal(lines.at(-1), "x");
+});
+
 test("intraline diff remains width-safe, searchable, and sanitized with tabs and wide graphemes", () => {
   const harness = reviewComponentHarness({
     ...reviewScreen,

@@ -2,6 +2,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { DaemonError, requestDaemon } from "./client-transport.js";
 import { stopDaemonAfterForegroundQueueFailure } from "./daemon-recovery.js";
+import {
+  DIFF_REVIEW_REQUEST_MS,
+  type DiffReviewPreview,
+  isDiffReviewId,
+  parseDiffReviewInventory,
+  readDiffReviewPreview,
+} from "./diff-review-protocol.js";
 import { isForegroundDirection, isForegroundQueueOutcome } from "./foreground-queue-outcome.js";
 import { canonicalRootGuard, type RuntimePaths, readProcessBirth } from "./identity.js";
 import { withCleanup } from "./lifecycle.js";
@@ -15,6 +22,7 @@ import {
   type Identity,
   type JobView,
   MAX_REVIEW_BYTES,
+  OWNERSHIP_CLEANUP_REQUIRED,
   operationPrefix,
   REVIEW_PAGE_CHARS,
   record,
@@ -73,6 +81,7 @@ export class DaemonConnection {
   private controller = new AbortController();
   private callbacks = new Map<string, PendingCallback>();
   private callbackIO = new AbortController();
+  private diffReviewIO = new AbortController();
   private callbackTasks = new Set<Promise<void>>();
   private updates = Promise.resolve();
   private attached = false;
@@ -135,6 +144,8 @@ export class DaemonConnection {
     )
       throw new Error("Daemon client is unavailable; reconnect after draining work.");
     this.admitting = true;
+    this.diffReviewIO.abort();
+    this.diffReviewIO = new AbortController();
     this.lifecycleRevision++;
     this.contactRevision++;
     const request = requestDaemon(
@@ -330,6 +341,14 @@ export class DaemonConnection {
       if (job.phase === "failed")
         throw new DaemonError(job.error ?? { name: "Error", message: "Daemon operation failed." });
       if (!foreground) signal?.throwIfAborted();
+      if (operation === "diff.review") {
+        try {
+          return parseDiffReviewInventory(job.result);
+        } catch (error) {
+          abort();
+          throw error;
+        }
+      }
       if (assertRoot && isForegroundQueueOutcome(job.result))
         this.foregroundRecovery = {
           job: id,
@@ -418,9 +437,77 @@ export class DaemonConnection {
           }
         }
       },
-    ).finally(() => {
-      this.pendingJobs.delete(id);
-    });
+    )
+      .catch((error: unknown) => {
+        if (operation !== "diff.review") throw error;
+        if (error instanceof DaemonError && error.remote.properties?.code === OWNERSHIP_CLEANUP_REQUIRED) {
+          throw new DaemonError({
+            name: "Error",
+            message: "Daemon ownership cleanup must be confirmed before opening a file review.",
+            properties: { code: OWNERSHIP_CLEANUP_REQUIRED },
+          });
+        }
+        signal?.throwIfAborted();
+        if (error instanceof DaemonError && error.message === "Unsupported engine operation.")
+          throw new DaemonError({ name: "Error", message: "Unsupported engine operation." });
+        throw new Error("Could not open the daemon diff review. Check the connection and try again.");
+      })
+      .finally(() => {
+        this.pendingJobs.delete(id);
+      });
+  }
+  private canReadDiffReview() {
+    return (
+      this.attached &&
+      !this.admitting &&
+      !this.closed &&
+      !this.pausing &&
+      !this.disposing &&
+      !this.uncertain &&
+      this.contactResumeState === "idle" &&
+      this.contactState !== "expired" &&
+      this.contactState !== "inactive" &&
+      this.facts.mode === "tui" &&
+      this.facts.hasUI
+    );
+  }
+  private async diffReviewRequest(
+    method: "diff-review-read" | "diff-review-close",
+    id: string,
+    fileId?: string,
+    signal?: AbortSignal,
+  ) {
+    signal?.throwIfAborted();
+    if (!isDiffReviewId(id) || (method === "diff-review-read" && !isDiffReviewId(fileId)))
+      throw new Error("Invalid diff review identity.");
+    if (!this.canReadDiffReview()) return method === "diff-review-read" ? { kind: "stale" } : true;
+    const client = this.facts.id;
+    const generation = this.facts.generation;
+    const lifetime = this.diffReviewIO.signal;
+    const owned = AbortSignal.any([
+      this.controller.signal,
+      lifetime,
+      AbortSignal.timeout(DIFF_REVIEW_REQUEST_MS),
+      ...(signal ? [signal] : []),
+    ]);
+    try {
+      const reply = await requestDaemon(this.paths, this.identity, method, { client, generation, id, fileId }, owned);
+      owned.throwIfAborted();
+      if (!this.canReadDiffReview() || this.facts.id !== client || this.facts.generation !== generation)
+        return method === "diff-review-read" ? { kind: "stale" } : true;
+      return reply;
+    } catch {
+      signal?.throwIfAborted();
+      lifetime.throwIfAborted();
+      throw new Error("Daemon file review request failed. Try again or reopen the review.");
+    }
+  }
+  async readDiffReview(id: string, fileId: string, signal?: AbortSignal): Promise<DiffReviewPreview> {
+    return readDiffReviewPreview(await this.diffReviewRequest("diff-review-read", id, fileId, signal));
+  }
+  async closeDiffReview(id: string, signal?: AbortSignal): Promise<void> {
+    if ((await this.diffReviewRequest("diff-review-close", id, undefined, signal)) !== true)
+      throw new Error("Invalid daemon diff review release acknowledgement.");
   }
   canRecoverForeground(job: string): boolean {
     const target = this.foregroundRecovery;
@@ -789,6 +876,7 @@ export class DaemonConnection {
     if (this.closed || this.disposing) throw new Error("Daemon client is closed.");
     if (this.pausing) return this.pausing;
     this.resuming?.abort(new DOMException("Client paused", "AbortError"));
+    this.diffReviewIO.abort();
     this.lifecycleRevision++;
     this.contactRevision++;
     this.pausing = (async () => {
@@ -804,6 +892,7 @@ export class DaemonConnection {
     if (this.disposing) return this.disposing;
     if (this.closed) return;
     this.resuming?.abort(new DOMException("Client disposed", "AbortError"));
+    this.diffReviewIO.abort();
     this.lifecycleRevision++;
     this.contactRevision++;
     this.disposing = (async () => {

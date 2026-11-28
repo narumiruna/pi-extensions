@@ -1,6 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { encodeKey, posixJoin } from "../../paths.js";
+import { SnapshotCaptureLimitError } from "../../snapshot/snapshot-capture-limit.js";
 import { retryAfter } from "../../sync/continuous-errors.js";
 import type { RemoteObject, ResolvedS3Backend } from "../backend-types.js";
 
@@ -110,12 +111,15 @@ export class S3Client {
     throw lastError;
   }
 
-  async getBuffer(key: string): Promise<RemoteObject<Buffer>> {
+  async getBuffer(key: string, maxBytes?: number): Promise<RemoteObject<Buffer>> {
     const maxAttempts = 3;
     let lastError: unknown;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const object = await this.request("GET", key);
-      if (object.status === 404) return { missing: true };
+      if (object.status === 404) {
+        if (maxBytes !== undefined) await object.body?.cancel().catch(() => undefined);
+        return { missing: true };
+      }
       if (!object.ok) {
         throw new S3HttpError(
           `S3 GET failed (${object.status}): ${await this.readErrorText(object)}`,
@@ -123,7 +127,18 @@ export class S3Client {
           retryAfter(object),
         );
       }
-      const buffer = await readBoundedBuffer(object, MAX_SNAPSHOT_RESPONSE_BYTES, "S3 snapshot response");
+      const encoding = object.headers.get("content-encoding")?.toLowerCase();
+      if (maxBytes !== undefined && encoding && encoding !== "identity") {
+        await object.body?.cancel().catch(() => undefined);
+        throw new SnapshotCaptureLimitError();
+      }
+      const limit = Math.min(maxBytes ?? MAX_SNAPSHOT_RESPONSE_BYTES, MAX_SNAPSHOT_RESPONSE_BYTES);
+      const buffer = await readBoundedBuffer(
+        object,
+        limit,
+        "S3 snapshot response",
+        maxBytes === undefined ? undefined : () => new SnapshotCaptureLimitError(),
+      );
       // R2 can intermittently return an empty 200 body on a long-lived
       // keep-alive connection (same root cause as the getJson retry
       // above). getBuffer is only used for snapshot .json.gz payloads,
@@ -302,12 +317,17 @@ async function readBoundedText(response: Response, limit: number, label: string)
   return (await readBoundedBuffer(response, limit, label)).toString("utf8");
 }
 
-async function readBoundedBuffer(response: Response, limit: number, label: string) {
+async function readBoundedBuffer(
+  response: Response,
+  limit: number,
+  label: string,
+  limitError = () => new Error(`${label} exceeds the ${limit}-byte limit.`),
+) {
   const contentLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > limit) {
     // Do not await cancellation of a cloned stream before its sibling can be released.
     void response.body?.cancel().catch(() => undefined);
-    throw new Error(`${label} exceeds the ${limit}-byte limit.`);
+    throw limitError();
   }
   if (!response.body) return Buffer.alloc(0);
   const reader = response.body.getReader();
@@ -320,7 +340,7 @@ async function readBoundedBuffer(response: Response, limit: number, label: strin
       total += value.byteLength;
       if (total > limit) {
         void reader.cancel().catch(() => undefined);
-        throw new Error(`${label} exceeds the ${limit}-byte limit.`);
+        throw limitError();
       }
       chunks.push(Buffer.from(value));
     }

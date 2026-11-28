@@ -1,6 +1,7 @@
 import type { ExtensionCommandContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
 import { safeMenuText } from "./components/rendering.js";
+import { type InternalInteractionUi, interactionUi } from "./custom-interaction-ui.js";
 import { callErrorReporter, notifyInteractionError } from "./interaction-error.js";
 import type { MenuContext } from "./types.js";
 
@@ -134,7 +135,7 @@ export async function runCustomInteraction<Value, Context extends MenuContext = 
         );
         return wrappedComponent;
       },
-      options.blocked ? { blocked: options.blocked } : undefined,
+      (options as InternalInteractionUi)[interactionUi] ?? (options.blocked ? { blocked: options.blocked } : undefined),
     );
     customResult = await Promise.race([interaction, disposal]);
   } catch (error) {

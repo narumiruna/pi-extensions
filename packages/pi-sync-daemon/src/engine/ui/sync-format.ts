@@ -1,36 +1,31 @@
 import type { PublicationCapability, RemoteHead } from "../backends/sync-backend.js";
 import type { CommonSyncConfig } from "../settings/settings-types.js";
 import { agentDir } from "../snapshot/session-paths.js";
-import type { Snapshot } from "../snapshot/snapshot-types.js";
+import { type SnapshotDifference, snapshotDifferences } from "../snapshot/snapshot-difference.js";
+import type { Snapshot, SnapshotFileHash } from "../snapshot/snapshot-types.js";
 import { inspectRemoteSelection } from "../sync/sync-policy.js";
-import { fileHashMap } from "../sync/sync-state.js";
 import { safeTerminalText, snapshotPathLabel } from "./terminal-text.js";
 import { transferChanges, transferCounts } from "./transfer-changes.js";
 
 export function formatDiff(local: Snapshot, remote: Snapshot) {
-  const localMap = fileHashMap(local);
-  const remoteMap = fileHashMap(remote);
-  const allPaths = [...new Set([...Object.keys(localMap), ...Object.keys(remoteMap)])].sort();
-  const lines = [
+  const changes = snapshotDifferences(local.files, remote.files);
+  return [
+    ...formatDiffCounts(local, remote),
+    "",
+    ...(changes.length ? changes.map(formatDiffRow) : ["No file differences."]),
+  ].join("\n");
+}
+
+export function formatDiffCounts(local: Snapshot, remote: Snapshot) {
+  return [
     `local: ${local.files.length} files`,
     `remote: ${safeTerminalText(remote.id)} (${remote.files.length} files)`,
-    "",
   ];
-  let changed = 0;
-  for (const filePath of allPaths) {
-    if (!Object.hasOwn(localMap, filePath)) {
-      lines.push(`Remote only: ${snapshotPathLabel(filePath)}`);
-      changed += 1;
-    } else if (!Object.hasOwn(remoteMap, filePath)) {
-      lines.push(`Local only: ${snapshotPathLabel(filePath)}`);
-      changed += 1;
-    } else if (localMap[filePath] !== remoteMap[filePath]) {
-      lines.push(`Different: ${snapshotPathLabel(filePath)}`);
-      changed += 1;
-    }
-  }
-  if (changed === 0) lines.push("No file differences.");
-  return lines.join("\n");
+}
+
+export function formatDiffRow(change: SnapshotDifference<SnapshotFileHash>) {
+  const label = { "local-only": "Local only", "remote-only": "Remote only", different: "Different" };
+  return `${label[change.status]}: ${snapshotPathLabel(change.path)}`;
 }
 
 export function formatSnapshotOnlyDiff(title: string, snapshot: Snapshot) {

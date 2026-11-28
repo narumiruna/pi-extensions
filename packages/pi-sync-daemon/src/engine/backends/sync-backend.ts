@@ -68,8 +68,11 @@ export interface SyncBackend {
   /** Recovery-only equivalence for retiring an inactive candidate; never authorizes publication or apply. */
   matchesUncommittedRecoveryHead?(current: RemoteHead, recorded: RemoteHead): boolean;
   readHead(signal?: AbortSignal): Promise<RemoteHead | undefined>;
-  readHeadAndSnapshot?(signal?: AbortSignal): Promise<{ head: RemoteHead; snapshot: Snapshot } | undefined>;
-  readSnapshot(reference: string, signal?: AbortSignal): Promise<Snapshot>;
+  readHeadAndSnapshot?(
+    signal?: AbortSignal,
+    maxBytes?: number,
+  ): Promise<{ head: RemoteHead; snapshot: Snapshot } | undefined>;
+  readSnapshot(reference: string, signal?: AbortSignal, maxBytes?: number): Promise<Snapshot>;
   publishSnapshot(
     snapshot: Snapshot,
     expected: ExpectedRemoteHead,

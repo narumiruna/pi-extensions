@@ -16,8 +16,13 @@ import {
 } from "./sync-policy.js";
 import { syncPolicyChanged } from "./sync-state.js";
 
-async function readValidatedSnapshotForHead(backend: SyncBackend, head: RemoteHead, signal?: AbortSignal) {
-  const snapshot = await backend.readSnapshot(head.snapshotRef, signal);
+async function readValidatedSnapshotForHead(
+  backend: SyncBackend,
+  head: RemoteHead,
+  signal?: AbortSignal,
+  maxBytes?: number,
+) {
+  const snapshot = await backend.readSnapshot(head.snapshotRef, signal, maxBytes);
   throwIfAborted(signal);
   return validateSnapshotForHead(snapshot, head);
 }
@@ -75,9 +80,10 @@ export async function readRemoteSnapshot(
     allowSelectionDifference?: boolean;
     sessionDir?: string;
     validateSelection?: (rawSnapshot: Snapshot) => void;
+    maxBytes?: number;
   } = {},
 ) {
-  const observed = await readCurrentSnapshot(backend, config.scope === "agent-directory", signal);
+  const observed = await readCurrentSnapshot(backend, config.scope === "agent-directory", signal, options.maxBytes);
   if (!observed) return { head: undefined, snapshot: undefined, selectionState: undefined };
   const { head, snapshot: rawSnapshot } = observed;
   const selectionState = inspectRemoteSelection(config.include, rawSnapshot, config.exclude, config);
@@ -94,16 +100,21 @@ export async function readRemoteSnapshot(
   return { head, snapshot, selectionState };
 }
 
-async function readCurrentSnapshot(backend: SyncBackend, singleObservation: boolean, signal?: AbortSignal) {
+async function readCurrentSnapshot(
+  backend: SyncBackend,
+  singleObservation: boolean,
+  signal?: AbortSignal,
+  maxBytes?: number,
+) {
   if (singleObservation && backend.readHeadAndSnapshot) {
-    const observed = await backend.readHeadAndSnapshot(signal);
+    const observed = await backend.readHeadAndSnapshot(signal, maxBytes);
     throwIfAborted(signal);
     if (observed) validateSnapshotForHead(observed.snapshot, observed.head);
     return observed;
   }
   const head = await backend.readHead(signal);
   throwIfAborted(signal);
-  return head && { head, snapshot: await readValidatedSnapshotForHead(backend, head, signal) };
+  return head && { head, snapshot: await readValidatedSnapshotForHead(backend, head, signal, maxBytes) };
 }
 
 export async function readSnapshotForHead(backend: SyncBackend, head: RemoteHead, signal?: AbortSignal) {

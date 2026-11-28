@@ -82,15 +82,15 @@ export class S3SyncBackend implements SyncBackend {
     return head;
   }
 
-  async readSnapshot(reference: string, signal?: AbortSignal): Promise<Snapshot> {
+  async readSnapshot(reference: string, signal?: AbortSignal, maxBytes?: number): Promise<Snapshot> {
     const expectedChecksum = this.checksums.get(reference) ?? (await this.resolveChecksum(reference, signal));
-    const object = await new S3Client(this.config, signal).getBuffer(snapshotKey(this.config, reference));
+    const object = await new S3Client(this.config, signal).getBuffer(snapshotKey(this.config, reference), maxBytes);
     throwIfAborted(signal);
     if (!object.value) throw new Error(`Snapshot not found: ${reference}`);
     if (expectedChecksum && sha256(object.value) !== expectedChecksum) {
       throw new Error("Remote snapshot checksum mismatch.");
     }
-    const snapshot = await decodeSnapshot(object.value, { signal });
+    const snapshot = await decodeSnapshot(object.value, { signal, maxOutputLength: maxBytes });
     if (snapshot.id !== reference || snapshot.profile !== this.config.destination.namespace) {
       throw new Error("Remote snapshot identity mismatch.");
     }

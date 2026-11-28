@@ -15,6 +15,7 @@ export {
 } from "./daemon-recovery.js";
 export { DaemonUpgradeBlockedError } from "./daemon-startup.js";
 export { inspectDaemonStatus } from "./daemon-status.js";
+export { type DiffReviewInventory, type DiffReviewPreview, parseDiffReviewInventory } from "./diff-review-protocol.js";
 export type { DocumentView } from "./document.js";
 export { documentFingerprint } from "./document.js";
 export type { EngineContext, EngineHost, EngineSession, ReviewRequest } from "./engine/host.js";
