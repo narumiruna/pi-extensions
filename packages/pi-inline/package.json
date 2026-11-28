@@ -35,7 +35,7 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.6.0",
     "@earendil-works/pi-tui": "1.6.0",
-    "@types/node": "26.6.6",
+    "@types/node": "26.6.9",
     "typescript": "7.0.2"
   },
   "repository": {

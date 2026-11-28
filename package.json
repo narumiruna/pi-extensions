@@ -89,7 +89,7 @@
   },
   "devDependencies": {
     "@babel/parser": "8.1.3",
-    "@biomejs/biome": "2.6.8",
+    "@biomejs/biome": "2.6.9",
     "@changesets/cli": "3.0.3",
     "@csstools/css-tokenizer": "4.0.3",
     "@earendil-works/chord": "1.6.0",
@@ -98,7 +98,7 @@
     "@earendil-works/pi-coding-agent": "1.6.0",
     "@earendil-works/pi-durable": "1.6.0",
     "@earendil-works/pi-tui": "1.6.0",
-    "@types/node": "^26.6.6",
+    "@types/node": "^26.6.9",
     "@types/semver": "^7.8.0",
     "concurrently": "^10.0.7",
     "npm-check-updates": "23.1.1",
@@ -110,8 +110,8 @@
   },
   "overrides": {
     "agentfs-sdk": {
-      "@tursodatabase/database": "0.8.3",
-      "@tursodatabase/database-common": "0.8.3"
+      "@tursodatabase/database": "0.8.4",
+      "@tursodatabase/database-common": "0.8.4"
     },
     "brace-expansion": "5.0.12",
     "just-bash": {
@@ -119,7 +119,7 @@
       "sprintf-js": "npm:@lvcabral/sprintf@1.2.2"
     },
     "node-domexception": "npm:@profoundlogic/node-domexception@1.0.2",
-    "protobufjs": "7.6.5",
+    "protobufjs@7": "7.6.5",
     "undici@7": "7.30.1",
     "undici@8": "8.12.4"
   },

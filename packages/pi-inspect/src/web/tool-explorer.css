@@ -74,7 +74,7 @@
   background: transparent;
   text-align: left;
 }
-.tool-source > span:first-child {
+.tool-source > span:where(:first-child) {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -88,8 +88,7 @@
   color: var(--secondary);
   font-size: 11px;
 }
-.tool-source:hover,
-.tool-inventory-table button:hover {
+.tool-source:hover {
   background: var(--surface-hover);
 }
 .tool-source[aria-pressed="true"],
@@ -251,6 +250,9 @@
   font-weight: 500;
   text-align: left;
   overflow-wrap: anywhere;
+}
+.tool-inventory-table button:hover {
+  background: var(--surface-hover);
 }
 .tool-inventory-table td > span {
   display: block;
