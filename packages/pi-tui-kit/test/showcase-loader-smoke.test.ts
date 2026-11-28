@@ -76,6 +76,11 @@ test("Pi Jiti loads the repository showcase and opens its lazy Kit menu", async 
     expect(stripVTControlCharacters(component.render(width).join("\n"))).toContain('+title = "After"');
     renderer.send("\u001b[F");
     expect(stripVTControlCharacters(component.render(width).join("\n"))).toContain('+theme = "dark"');
+    renderer.send("m");
+    expect(handle.getBounds()?.height).toBe(1);
+    renderer.send("m");
+    expect(handle.getBounds()?.width).toBe(width);
+    expect(stripVTControlCharacters(component.render(width).join("\n"))).toContain('+theme = "dark"');
     renderer.send("\u001b");
     await tui.waitForOpen();
     expect(tui.render().join("\n")).toContain("Pi TUI Kit Showcase");

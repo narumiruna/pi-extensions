@@ -137,9 +137,14 @@ test("abort between factory and mount leaves no late overlay", async () => {
   }
 });
 
-test.for(["dispose", "session_start", "session_shutdown"] as const)(
-  "%s releases the diff without reopening the old showcase or closing an unrelated overlay",
-  async (reason, t) => {
+test.for([
+  { reason: "dispose", state: "minimized" },
+  { reason: "session_start", state: "maximized" },
+  { reason: "session_shutdown", state: "minimized" },
+  { reason: "session_shutdown", state: "maximized" },
+] as const)(
+  "$reason releases the $state diff without reopening the old showcase or closing an unrelated overlay",
+  async ({ reason, state }, t) => {
     const theme = rendererTheme();
     const renderer = createRendererHost("fullscreen", theme);
     const menu = createTuiHarness({ width: 80, rows: 24 });
@@ -163,12 +168,20 @@ test.for(["dispose", "session_start", "session_shutdown"] as const)(
     await menu.waitForOpen();
     menu.type("floating diff");
     menu.press("tui.select.confirm");
-    await overlay.opened;
+    const { handle } = await overlay.opened;
+    renderer.send(state === "minimized" ? "m" : "z");
+    const bounds = handle.getBounds();
+    if (!bounds) throw new Error("Expected overlay bounds");
+    expect(bounds.height).toBe(state === "minimized" ? 1 : renderer.host.terminal.rows);
+    const closeColumn = bounds.col + bounds.width - 3;
+    const press = `\x1b[<0;${closeColumn + 1};${bounds.row + 1}`;
+    renderer.send(`${press}M`);
     const unrelated = renderer.host.showOverlay({ render: () => ["Unrelated overlay"], invalidate() {} });
     try {
       if (reason === "dispose") overlay.disposeFromHost();
       else await events.get(reason)?.();
       await running;
+      renderer.send(`${press}m`);
       expect(overlay.completions).toBe(reason === "dispose" ? 0 : 1);
       expect(overlay.mounts).toBe(1);
       expect(menu.openCount).toBe(1);

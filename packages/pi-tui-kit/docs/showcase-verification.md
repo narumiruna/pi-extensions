@@ -98,14 +98,18 @@ Ctrl+C: close all demo overlays, including under neste
 
 From the checkout root, run `npm run showcase:tui-kit`, open `/tui-kit-showcase`, and select **Floating diff**. The overlay compares two in-memory text fixtures with three context lines per change. It shows a notice instead of a partial result if the combined input, output, or diff work exceeds its preview bound. It does not read user files, call Git, or accept changes. It does not add a published API or a side-by-side layout.
 
-For a physical check, scroll with the configured selection keys (Up/Down by default) and resize to a narrow terminal. Confirm that the last added line stays reachable. Close with Esc (or the configured cancel key), then reopen and test Ctrl+C. Both paths return to the Showcase menu. Repeat in regular and fullscreen mode. If the host consumes Ctrl+C first, the demo warns instead of opening. The comparison does not require a provider or credentials.
+With Pi fullscreen mouse input enabled, click `[_]` to collapse the diff into a one-line title at the bottom, or `[+]` to restore it in its previous mode. The minimized title keeps keyboard focus so you can restore or close it. Click `[□]` to use the entire visible Pi terminal area, or `[❐]` to restore the saved size and position. Maximizing does not change the terminal mode. Click `[x]` for the same return to Showcase as the configured cancel key or Ctrl+C. If another overlay has focus, clicking the diff's `[x]` closes only the diff without reopening the menu over the focused overlay.
+
+In either TUI mode, `m` minimizes or restores and `z` maximizes or restores the normal size. If those keys conflict with a native action, the title uses `u` or `w` if available; if neither candidate is available for an action, that action is omitted. Pi regular mode does not send mouse clicks to the overlay. If the host consumes Ctrl+C first, the demo warns instead of opening.
+
+For a physical check, drag the normal title and resize from its lower-right corner. Click each control in fullscreen; press a button, drag off it, and release to check that no action runs. Verify the saved position and size after maximizing and restoring. Scroll, minimize, then restore and check that the reading position remains. Resize to a narrow terminal and confirm that the last added line stays reachable. In regular mode, repeat with the title shortcuts, and check that Esc (or the configured cancel key) and Ctrl+C return to Showcase from each size. No provider or credentials are required.
 
 The following component frames came from Pi's fullscreen renderer harness, with ANSI color removed. The prototype also runs in the regular renderer harness and through the real Pi Jiti resource loader. These captures do not verify physical terminal color, key protocol negotiation, or visual acceptance.
 
 Wide, top of the diff (72 columns × 16 rows):
 
 ```text
-╭ Floating diff                                                        ╮
+╭ Floating diff · m minimize · z maximize                     [_][□][x]╮
 │--- a/settings.toml                                                   │
 │+++ b/settings.toml                                                   │
 │@@ -1,6 +1,6 @@                                                       │
@@ -123,24 +127,27 @@ Wide, top of the diff (72 columns × 16 rows):
 ╰─────────────────────────────────────────────────────────────────────◢╯
 ```
 
-Narrow start and end after resizing (28 columns × 7 rows):
+In the same 80-column terminal, the minimized title (64 columns) and the top of the maximized diff (80 columns):
 
 ```text
-╭ Floating diff            ╮
-│--- a/settings.toml       │
-│+++ b/settings.toml       │
-│@@ -1,6 +1,6 @@           │
-│1-3/22                    │
-│↑/↓ navigate • esc close  │
-╰─────────────────────────◢╯
+╶ Floating diff · m restore · ctrl+c close               [+][x]╴
 
-╭ Floating diff            ╮
-│the window instead of bein│
-│g cut off"                │
-│+theme = "dark"           │
-│20-22/22                  │
-│↑/↓ navigate • esc close  │
-╰─────────────────────────◢╯
+╭ Floating diff · m minimize · z restore size                         [_][❐][x]╮
+│--- a/settings.toml                                                           │
+```
+
+Narrow end after restoring and resizing (32 columns × 9 rows):
+
+```text
+╭ Floating diff       [_][□][x]╮
+│-theme = "light"              │
+│+message = "你好 🙂 — a long l│
+│ine that wraps inside the wind│
+│ow instead of being cut off"  │
+│+theme = "dark"               │
+│17-21/21                      │
+│↑/↓ navigate • esc close      │
+╰─────────────────────────────◢╯
 ```
 
 ## Physical terminal handoff
