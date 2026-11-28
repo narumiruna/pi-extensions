@@ -1,6 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { FloatingFrame } from "@narumitw/pi-tui-kit/floating-frame";
+import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { prepareDiffDocument } from "./diff-document.js";
+import { FloatingDiffWindow } from "./floating-diff-window.js";
 import { demoHasHardCancel, HARD_CANCEL_WARNING } from "./hard-cancel.js";
 import type { ShowTuiKitShowcaseOptions } from "./runtime.js";
 
@@ -40,7 +41,8 @@ export async function runFloatingDiffDemo(
 
   const document = prepareDiffDocument(SAMPLE.before, SAMPLE.after);
   const unmounted = Promise.withResolvers<void>();
-  let frame: FloatingFrame | undefined;
+  let frame: FloatingDiffWindow | undefined;
+  let overlay: OverlayHandle | undefined;
   let dispose: (() => void) | undefined;
   let checkCurrent: (() => boolean) | undefined;
   let returnToMenu = false;
@@ -86,25 +88,18 @@ export async function runFloatingDiffDemo(
           keybindings,
           onEvent: () => close(true),
         });
-        frame = new FloatingFrame({
-          getTerminalSize: () => tui.terminal,
-          initialBounds: ({ columns, rows }) => {
-            const width = Math.floor(columns * 0.9);
-            const height = Math.floor(rows * 0.8);
-            return { width, height, col: Math.floor((columns - width) / 2), row: Math.floor((rows - height) / 2) };
-          },
-          minSize: { columns: 24, rows: 5 },
-          requestRender: () => tui.requestRender(),
-          styleBorder: (text) => theme.fg("border", text),
-          styleTitle: (text) => theme.fg("accent", theme.bold(text)),
-          title: () => ` ${TITLE} `,
+        frame = new FloatingDiffWindow({
+          title: TITLE,
+          tui,
+          theme,
+          keybindings,
+          isCurrent: checkCurrent,
+          close: () => close(overlay?.isFocused() === true),
           body: {
             render: ({ columns, rows }) => (closed ? [] : review.render(columns, rows)),
             invalidate: () => review.invalidate(),
-            handleInput: (data) => {
-              if (checkCurrent?.()) review.handleInput(data);
-            },
-            handleMouse: (event) => (checkCurrent?.() ? review.handleMouse?.(event) : undefined),
+            handleInput: (data) => review.handleInput(data),
+            handleMouse: (event) => review.handleMouse?.(event),
           },
         });
         dispose = () => {
@@ -121,7 +116,14 @@ export async function runFloatingDiffDemo(
         checkCurrent();
         return Object.assign(frame, { dispose });
       },
-      { overlay: true, overlayOptions: () => frame?.overlayOptions ?? {}, onHandle: () => checkCurrent?.() },
+      {
+        overlay: true,
+        overlayOptions: () => frame?.overlayOptions ?? {},
+        onHandle: (handle) => {
+          overlay = handle;
+          checkCurrent?.();
+        },
+      },
     );
     await Promise.race([interaction, unmounted.promise]);
   } finally {
