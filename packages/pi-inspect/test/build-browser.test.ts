@@ -249,7 +249,7 @@ for (const replaced of ["output", "staging"] as const) {
 }
 
 for (const failure of ["browser", "runtime"] as const) {
-  test(`package build and prepack stop when the ${failure} build fails`, async () => {
+  test.each(["npm run build", "npm pack"])(`%s stops when the ${failure} build fails`, async (command) => {
     const checkout = await mkdtemp(join(tmpdir(), "inspect-build-order-"));
     try {
       const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
@@ -267,25 +267,21 @@ for (const failure of ["browser", "runtime"] as const) {
           `import { appendFileSync } from "node:fs"; appendFileSync("order.log", ${JSON.stringify(`${stage}\n`)}); ${stage === failure ? 'throw new Error("injected build failure");' : ""}`,
         );
       }
-      for (const args of [
-        ["run", "build"],
-        ["pack", "--pack-destination", checkout],
-      ] as const) {
-        await rm(join(checkout, "order.log"), { force: true });
-        const npm = process.env.npm_execpath;
-        assert.ok(npm, "Run package build tests through npm or npm exec");
-        const result = spawnSync(process.execPath, [npm, ...args], { cwd: checkout, encoding: "utf8" });
-        assert.notEqual(result.status, 0);
-        assert.match(`${result.stdout}${result.stderr}`, /injected build failure/u);
-        assert.equal(
-          await readFile(join(checkout, "order.log"), "utf8"),
-          failure === "browser" ? "browser\n" : "browser\nruntime\n",
-        );
-        assert.equal(
-          (await readdir(checkout)).some((file) => file.endsWith(".tgz")),
-          false,
-        );
-      }
+      const args = command === "npm run build" ? ["run", "build"] : ["pack", "--pack-destination", checkout];
+      const npm = process.env.npm_execpath;
+      assert.ok(npm, "Run package build tests through npm or npm exec");
+      const result = spawnSync(process.execPath, [npm, ...args], { cwd: checkout, encoding: "utf8" });
+      if (result.error) throw result.error;
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stdout}${result.stderr}`, /injected build failure/u);
+      assert.equal(
+        await readFile(join(checkout, "order.log"), "utf8"),
+        failure === "browser" ? "browser\n" : "browser\nruntime\n",
+      );
+      assert.equal(
+        (await readdir(checkout)).some((file) => file.endsWith(".tgz")),
+        false,
+      );
     } finally {
       await rm(checkout, { recursive: true, force: true });
     }
