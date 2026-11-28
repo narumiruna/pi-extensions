@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
+import { loadConfig } from "../src/settings/config.js";
 import { localConfigPath } from "../src/settings/config-file.js";
+import { readStateForConfig, writeStateForConfig } from "../src/state/sync-state-store.js";
 import { showSyncManager } from "../src/ui/manager-ui.js";
 import { withTempHome } from "./helpers.js";
 
@@ -85,6 +87,35 @@ for (const [setup, path, storage] of [
       assert.ok(frame.startsWith(`Manage sync\nCurrent sync setup: ${setup}\nStorage: ${storage}\n`), frame);
       assert.doesNotMatch(frame, /git@github|\baccess\b|\bsecret\b/u);
     }, value);
+  });
+}
+
+const generatedSnapshotId = "2026-11-28T04-22-55-475Z-1234abcd";
+for (const mode of ["tui", "rpc"] as const) {
+  test.each([
+    ["no prior sync", undefined, "Never synced"],
+    ["generated snapshot ID", generatedSnapshotId, generatedSnapshotId],
+    ["oversized opaque ID", `old-${"界".repeat(30)}`, `old-${"界".repeat(17)}…`],
+    ["ID containing terminal escapes", "opaque-\u001b[31mref\u001b[0m", "opaque-ref"],
+  ])(`${mode} shows %s as plain text in the manager`, async (_case, snapshotId, expected) => {
+    await withSettings(async () => {
+      const config = await loadConfig();
+      if (snapshotId) {
+        await writeStateForConfig(config, { ...(await readStateForConfig(config)), lastAppliedSnapshot: snapshotId });
+      }
+      let frame = "";
+      const { ctx } = createMockContext({
+        mode,
+        select: async (title: string) => {
+          frame = title;
+          return undefined;
+        },
+      });
+      await showSyncManager(ctx, async () => undefined);
+      assert.ok(frame.split("\n").includes(`Last applied snapshot: ${expected}`), frame);
+      assert.doesNotMatch(frame, /\[0m|\[31m/u);
+      assert.equal((await readStateForConfig(config)).lastAppliedSnapshot, snapshotId);
+    });
   });
 }
 

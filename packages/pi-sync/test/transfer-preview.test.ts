@@ -20,8 +20,7 @@ test("Last applied uses an opaque compact ID and History retains the full ID eve
     const full = `opaque-${"reference-".repeat(10)}`;
     await writeStateForConfig(f.config, { ...(await readStateForConfig(f.config)), lastAppliedSnapshot: full });
     const summary = await describeManagerState();
-    assert.match(summary.title, /application time unavailable/);
-    assert.equal(summary.title.includes(full), false);
+    assert.ok(summary.title.split("\n").includes(`Last applied snapshot: ${full.slice(0, 39)}…`));
     const context = createMockContext({ mode: "rpc" });
     const listing = vi.spyOn(f.backend, "listHistory").mockResolvedValue([]);
     try {

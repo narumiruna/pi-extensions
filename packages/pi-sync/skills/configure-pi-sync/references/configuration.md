@@ -80,7 +80,7 @@ Complex values retain their input/review flows.
 This navigation change does not alter schema, defaults, automatic-sync behavior, or explicit opt-ins.
 
 The main menu shows cached status separately from transfer, inspection, and management actions. **View differences** (`/sync diff`) reads current file differences only when selected. It works with Debug mode off and is not a comparison against the last sync.
-**Last applied** shows a compact snapshot ID and marks application time as unavailable instead of substituting snapshot creation time. **History** shows the full IDs.
+**Last applied snapshot** shows an ID, not an application time. The menu shortens long IDs; **History** shows the full IDs.
 See the [TUI behavior contract](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/tui-contract.md) for scopes and transfer branches.
 
 RPC reports the manual settings path and offers the existing setup/connection catalog dialogs, not the TUI preference or masked-credential editors.
@@ -864,7 +864,7 @@ Older codecs refuse version-3 partial snapshots and older settings readers refus
 `/sync conflicts` (also the conditional main **Review unresolved conflicts** action) shows private versions only when requested, in TUI or paginated RPC.
 It rejects confirmation/force bypass flags, reviews an entire group, then separately asks for local or remote authority.
 It revalidates the reviewed artifact fingerprint, group versions, baseline, configuration, ownership and current observed head before apply; stale/cancelled review performs no transfer.
-The manager always reports unresolved groups and the observed head separately from Last applied.
+The manager always reports unresolved groups and the observed head separately from **Last applied snapshot**.
 Repeated unchanged conflicts retain one stable opaque identity rather than creating more evidence or modal reviews.
 
 Artifacts are private immutable records below denied state storage with a 192 MiB/record cap; accepted ancestor records use the same bound, and actual content strategies have smaller limits.

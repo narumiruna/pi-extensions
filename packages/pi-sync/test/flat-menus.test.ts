@@ -84,7 +84,10 @@ for (const [label, expected] of [
 }
 
 const operationStates: OperationAvailability[] = [
-  { kind: "live", lock: { id: "live", pid: process.pid, command: "push", startedAt: new Date().toISOString() } },
+  {
+    kind: "live",
+    lock: { id: "live", pid: process.pid, command: "long-running-sync-command", startedAt: new Date().toISOString() },
+  },
   { kind: "busy", metadata: "missing" },
   { kind: "recoverable-stale", lock: { id: "old", pid: 1, command: "push", startedAt: "2000-01-01" } },
   { kind: "recoverable-unreadable" },
@@ -101,6 +104,9 @@ for (const operation of operationStates) {
         operation.kind.startsWith("recoverable") ? "Restore sync access… (recommended)" : "Refresh operation status",
       );
       assert.ok(manager.actions.includes("History"));
+      if (operation.kind === "live") {
+        assert.ok(manager.title.startsWith(`Manage sync\nRunning: long-running-sy… (pid ${process.pid}).`));
+      }
     });
   });
 }

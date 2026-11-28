@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { createSettingsConfigView, syncCheckConfigFingerprint } from "../settings/config.js";
 import { type LocalConfigDocument, readActiveLocalConfigDocumentForRepair } from "../settings/config-file.js";
@@ -130,13 +131,11 @@ export async function describeManagerState(
       syncStateFingerprint(syncState) === observation.inspection.stateIdentity
         ? observation
         : undefined;
-    const lastAppliedSnapshot = changesBlocked
-      ? "Unavailable while operations are locked"
-      : syncState?.lastAppliedSnapshot
-        ? `${truncateToWidth(safeTerminalText(syncState.lastAppliedSnapshot), 12, "…")} · application time unavailable`
-        : syncState
-          ? "Never synced"
-          : "Unavailable";
+    const lastAppliedSnapshot = syncState?.lastAppliedSnapshot
+      ? truncatePlainText(syncState.lastAppliedSnapshot, 40)
+      : syncState
+        ? "Never synced"
+        : "Unavailable";
     const canSwitch = !changesBlocked && (alternateUsable || (await hasAnotherSwitchableSetup(view, signal)));
     signal?.throwIfAborted();
     const mainActions: string[] = [...MAIN_MENU_ACTIONS];
@@ -166,7 +165,7 @@ export async function describeManagerState(
         : currentObservation
           ? [`Observed ${safeTerminalText(currentObservation.checkedAt)}: ${observationSummary(currentObservation)}`]
           : ["Remote status: Not checked"]),
-      `Last applied: ${lastAppliedSnapshot}`,
+      `Last applied snapshot: ${lastAppliedSnapshot}`,
       ...(config.automaticTransfer || (config.automatic && syncSessionsSelected(config))
         ? ["Automatic transfer permission: On · see Settings"]
         : []),
@@ -233,7 +232,7 @@ function operationStatusLines(operation: OperationAvailability): string[] {
     case "free":
       return [];
     case "live": {
-      const command = truncateToWidth(safeTerminalText(operation.lock.command), 16, "…");
+      const command = truncatePlainText(operation.lock.command, 16);
       return [
         `Running: ${command} (pid ${operation.lock.pid}). Wait, then refresh; Transfer actions and Settings return.`,
       ];
@@ -253,6 +252,11 @@ function operationStatusLines(operation: OperationAvailability): string[] {
     case "inspection-error":
       return ["Lock check failed. Fix path access, then refresh; Transfer actions and Settings remain unavailable."];
   }
+}
+
+function truncatePlainText(value: string, width: number) {
+  const text = safeTerminalText(stripVTControlCharacters(value));
+  return stripVTControlCharacters(truncateToWidth(text, width, "…"));
 }
 
 export function backendStorageDescription(config: AnySyncConfig) {
