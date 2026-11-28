@@ -180,6 +180,7 @@ for (const debug of [false, true]) {
 
 describe("existing startup checks with Debug mode", () => {
   let fixture: RpcFixture;
+  let client: SyncRpc;
   beforeEach(async (context) => {
     fixture = await createRpcFixture(context, path.resolve("packages/pi-sync"));
     await fixture.prepare(async () => {
@@ -189,23 +190,33 @@ describe("existing startup checks with Debug mode", () => {
       await fs.writeFile(file, JSON.stringify({ ...settings, debug: true }));
       await fixture.startDaemon();
       await adoptFixtureRoot(fixture.agent);
-      const client = await fixture.connect();
+      client = await fixture.connect();
       await client.start();
     });
   });
 
   test("records the existing remote check without an agent call or publication", async () => {
-    await vi.waitFor(async () => {
-      const log = await fs.readFile(path.join(fixture.agent, "pi-sync.log"), "utf8");
-      const checks = log
-        .trimEnd()
-        .split("\n")
-        .map((line) => JSON.parse(line))
-        .filter((event) => event.event === "check");
-      assert.equal(checks.length, 1);
-      assert.equal(checks[0].origin, "startup");
-      assert.equal(checks[0].summary.outcome, "checked");
-    });
+    const report = await vi.waitUntil(
+      () =>
+        client.records.find(
+          ({ type, method, message }) =>
+            type === "extension_ui_request" &&
+            method === "notify" &&
+            typeof message === "string" &&
+            message.startsWith("pi-sync debug: background startup"),
+        ),
+      { timeout: 4_000, message: "Pi RPC did not report background startup completion" },
+    );
+    assert.match(String(report.message), /^pi-sync debug: background startup \(completed\)\n/u);
+    const log = await fs.readFile(path.join(fixture.agent, "pi-sync.log"), "utf8");
+    const checks = log
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+      .filter((event) => event.event === "check");
+    assert.equal(checks.length, 1);
+    assert.equal(checks[0].origin, "startup");
+    assert.equal(checks[0].summary.outcome, "checked");
     assert.deepEqual(
       fixture.storage.requests.map(({ method }) => method),
       ["GET"],
