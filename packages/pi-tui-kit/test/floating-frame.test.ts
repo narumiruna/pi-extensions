@@ -117,6 +117,84 @@ test.each([{ capture: true }, { handled: true }, { focus: true }])(
   },
 );
 
+test.for([
+  { name: "top", x: 1, y: 0, horizontal: 0, vertical: -1 },
+  { name: "top after a wide title", x: 13, y: 0, horizontal: 0, vertical: -1 },
+  { name: "bottom", x: 13, y: 9, horizontal: 0, vertical: 1 },
+  { name: "left", x: 0, y: 5, horizontal: -1, vertical: 0 },
+  { name: "right", x: 25, y: 5, horizontal: 1, vertical: 0 },
+  { name: "top left", x: 0, y: 0, horizontal: -1, vertical: -1 },
+  { name: "top right", x: 25, y: 0, horizontal: 1, vertical: -1 },
+  { name: "bottom left", x: 0, y: 9, horizontal: -1, vertical: 1 },
+  { name: "bottom right", x: 25, y: 9, horizontal: 1, vertical: 1 },
+  { name: "existing bottom-right grip", x: 24, y: 9, horizontal: 1, vertical: 1 },
+])("native fullscreen resizes from $name and keeps the opposite edges fixed", (edge, t) => {
+  const terminal = new FullscreenTerminal();
+  const tui = new TuiAltScreen(terminal);
+  const editor = { render: () => ["Main editor"], invalidate() {} };
+  const initial = { col: 12, row: 8, width: 26, height: 10 };
+  const events: string[] = [];
+  const frame = new FloatingFrame({
+    getTerminalSize: () => terminal,
+    initialBounds: () => initial,
+    minSize: { columns: 18, rows: 6 },
+    requestRender: () => tui.requestRender(),
+    styleBorder: (s) => s,
+    styleTitle: (s) => s,
+    title: () => " 視窗 ",
+    overlay: { nonCapturing: true },
+    body: {
+      render: () => [],
+      invalidate() {},
+      handleMouse: ({ type }) => {
+        events.push(type);
+        return { handled: true };
+      },
+    },
+  });
+  tui.addChild(editor);
+  tui.setFocus(editor);
+  tui.start();
+  const handle = tui.showOverlay(frame, frame.overlayOptions);
+  t.onTestFinished(() => {
+    handle.hide();
+    tui.stop();
+  });
+  tui.renderNow();
+  const x = initial.col + edge.x;
+  const y = initial.row + edge.y;
+  const mouse = (code: number, dx: number, dy: number, release = false) => {
+    terminal.input(`\x1b[<${code};${x + dx + 1};${y + dy + 1}${release ? "m" : "M"}`);
+    tui.renderNow();
+  };
+  const { horizontal, vertical } = edge;
+  mouse(0, 0, 0);
+  assert.deepEqual(handle.getBounds(), initial);
+  mouse(32, -30 * horizontal || 2, -12 * vertical || 2);
+  assert.deepEqual(handle.getBounds(), {
+    col: horizontal < 0 ? 20 : 12,
+    row: vertical < 0 ? 12 : 8,
+    width: horizontal ? 18 : 26,
+    height: vertical ? 6 : 10,
+  });
+  mouse(32, horizontal < 0 ? -x : terminal.columns - 1 - x, vertical < 0 ? -y : terminal.rows - 1 - y);
+  assert.deepEqual(handle.getBounds(), {
+    col: horizontal < 0 ? 0 : 12,
+    row: vertical < 0 ? 0 : 8,
+    width: horizontal < 0 ? 38 : horizontal > 0 ? 68 : 26,
+    height: vertical < 0 ? 18 : vertical > 0 ? 16 : 10,
+  });
+  mouse(0, 3 * horizontal || 2, 2 * vertical || 2, true);
+  assert.deepEqual(handle.getBounds(), {
+    col: horizontal < 0 ? 9 : 12,
+    row: vertical < 0 ? 6 : 8,
+    width: horizontal ? 29 : 26,
+    height: vertical ? 12 : 10,
+  });
+  assert.deepEqual(events, []);
+  assert.equal(tui.getFocusedComponent(), editor);
+});
+
 test("floating frame reports bounded viewports, preserves cursor cells, and does not move a focused editor on drag", () => {
   const size = { columns: 100, rows: 30 };
   let invalidations = 0;
