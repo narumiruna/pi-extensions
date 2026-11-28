@@ -57,7 +57,7 @@ export async function showTuiKitShowcase(
       return;
     }
 
-    await runStandaloneInteraction(ctx, state, pendingStandalone, options);
+    if ((await runStandaloneInteraction(ctx, state, pendingStandalone, options)) === "stop") return;
   }
 }
 
@@ -66,7 +66,7 @@ async function runStandaloneInteraction(
   state: ShowcaseState,
   interaction: ShowcaseStandaloneInteraction,
   options: ShowTuiKitShowcaseOptions,
-): Promise<void> {
+): Promise<"stop" | undefined> {
   if (options.signal.aborted || !options.isCurrent()) return;
   if (interaction === "task" || interaction === "taskFailure" || interaction === "taskCancel") {
     await runShowcaseTask(ctx, state, interaction, options);
@@ -84,6 +84,11 @@ async function runStandaloneInteraction(
     const { runCopyCaptureShowcase } = await import("./copy-demo.js");
     if (!options.signal.aborted && options.isCurrent()) await runCopyCaptureShowcase(ctx, options);
     return;
+  }
+  if (interaction === "floatingDiff") {
+    const { runFloatingDiffDemo } = await import("./floating-diff-demo.js");
+    if (options.signal.aborted || !options.isCurrent()) return "stop";
+    return (await runFloatingDiffDemo(ctx, options)) ? undefined : "stop";
   }
   if (interaction === "native") {
     const { runNativePointerDemo } = await import("./native-demo.js");

@@ -94,6 +94,55 @@ Ctrl+C: close all demo overlays, including under neste
 ──────────────────────────────────────────────────────
 ```
 
+## Floating diff prototype
+
+From the checkout root, run `npm run showcase:tui-kit`, open `/tui-kit-showcase`, and select **Floating diff**. The overlay compares two in-memory text fixtures with three context lines per change. It shows a notice instead of a partial result if the combined input, output, or diff work exceeds its preview bound. It does not read user files, call Git, or accept changes. It does not add a published API or a side-by-side layout.
+
+For a physical check, scroll with the configured selection keys (Up/Down by default) and resize to a narrow terminal. Confirm that the last added line stays reachable. Close with Esc (or the configured cancel key), then reopen and test Ctrl+C. Both paths return to the Showcase menu. Repeat in regular and fullscreen mode. If the host consumes Ctrl+C first, the demo warns instead of opening. The comparison does not require a provider or credentials.
+
+The following component frames came from Pi's fullscreen renderer harness, with ANSI color removed. The prototype also runs in the regular renderer harness and through the real Pi Jiti resource loader. These captures do not verify physical terminal color, key protocol negotiation, or visual acceptance.
+
+Wide, top of the diff (72 columns × 16 rows):
+
+```text
+╭ Floating diff                                                        ╮
+│--- a/settings.toml                                                   │
+│+++ b/settings.toml                                                   │
+│@@ -1,6 +1,6 @@                                                       │
+│ # Synthetic settings                                                 │
+│-title = "Before"                                                     │
+│-preview = false                                                      │
+│+title = "After"                                                      │
+│+preview = true                                                       │
+│ option_1 = true                                                      │
+│ option_2 = true                                                      │
+│ option_3 = true                                                      │
+│@@ -19,5 +19,5 @@                                                     │
+│1-12/20                                                               │
+│↑/↓ navigate • esc close                                              │
+╰─────────────────────────────────────────────────────────────────────◢╯
+```
+
+Narrow start and end after resizing (28 columns × 7 rows):
+
+```text
+╭ Floating diff            ╮
+│--- a/settings.toml       │
+│+++ b/settings.toml       │
+│@@ -1,6 +1,6 @@           │
+│1-3/22                    │
+│↑/↓ navigate • esc close  │
+╰─────────────────────────◢╯
+
+╭ Floating diff            ╮
+│the window instead of bein│
+│g cut off"                │
+│+theme = "dark"           │
+│20-22/22                  │
+│↑/↓ navigate • esc close  │
+╰─────────────────────────◢╯
+```
+
 ## Physical terminal handoff
 
 **Responsible role:** maintainer or tester with the target terminal/client. **Prerequisite:** a local build and passing deterministic checks; use synthetic data only. **Action:** perform the steps below. **Expected result:** correct focus, native input ownership, bounded layout, and complete source capture. **Unverified behavior:** hardware cursor, IME placement, terminal negotiation, subjective colors, OS clipboard access, and remote OSC 52 acceptance. **Restriction:** simulated output does not establish physical acceptance; automated checks must not overwrite a real clipboard.
