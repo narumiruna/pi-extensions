@@ -167,6 +167,8 @@ Type in the main menu to filter demo names and descriptions; spaces are part of 
 The menu also includes masked synthetic input, editable prefill, model/thinking selectors, theme/style samples, bounded task success/failure/cancellation, native pointer/overlay routing, and in-memory copy capture. It reopens after each standalone interaction. Runtime information identifies the local built Kit version, API version, and sanitized resolved module origin.
 All demo state stays in memory and resets on each command or session replacement. Save-default selector intent changes only demo state; no Pi settings or real session model changes occur. Enter only synthetic values in secret examples.
 The copy demo deliberately fails its first attempt, then captures exact synthetic source in memory; it never writes the system clipboard. Native examples do not replace Pi's renderer or layout. See the [showcase verification and release handoff](./docs/showcase-verification.md) for evidence, physical terminal steps, and unverified paths.
+
+Search for **Floating diff** to compare two synthetic documents in a read-only overlay. Use the configured selection keys (Up/Down and Esc by default) to scroll and close; Ctrl+C also closes the overlay. The prototype does not read user files, run Git, or offer side-by-side display. See the [floating diff verification](./docs/showcase-verification.md#floating-diff-prototype) for example frames.
 RPC reports that TUI mode is required, while print and JSON modes reject the command without ad hoc output.
 The demo loads Kit only when the command runs and is not registered in the repository's default extension set.
 

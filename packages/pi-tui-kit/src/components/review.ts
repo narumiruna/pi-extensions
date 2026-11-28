@@ -37,14 +37,18 @@ export type ReviewOptions<ScreenId extends string, ActionId extends string> = Me
   screen: Extract<MenuScreen<ScreenId, ActionId>, { kind: "review" }>;
 };
 
+interface ReviewComponent extends MenuScreenComponent {
+  render(width: number, floatingBodyRows?: number): string[];
+}
+
 export function createReviewComponent<ScreenId extends string, ActionId extends string>(
   options: ReviewOptions<ScreenId, ActionId>,
-): MenuScreenComponent {
+): ReviewComponent {
   options = { ...options, keybindings: componentKeybindings(options.tui, options.keybindings) };
   let scrollOffset = 0;
   let lastMaximumScroll = 0;
   let lastViewportSize = reviewViewportSize(options.screen);
-  let lastTerminalRows = options.tui.terminal.rows;
+  let lastAvailableRows = options.tui.terminal.rows;
   let lastSearchActive = false;
   let disposed = false;
   let focused = false;
@@ -91,8 +95,8 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
     else if (row >= scrollOffset + lastViewportSize) moveTo(row - lastViewportSize + 1);
   };
 
-  const component: MenuScreenComponent & Partial<Focusable> = {
-    render(width) {
+  const component: ReviewComponent & Partial<Focusable> = {
+    render(width, floatingBodyRows) {
       if (!Number.isFinite(width) || width <= 0) {
         mouseLayout = undefined;
         return [];
@@ -113,9 +117,9 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
         lastSearchSources,
       );
       const searchActive = search?.active ?? false;
-      const terminalRows = options.tui.terminal.rows;
+      const availableRows = floatingBodyRows ?? options.tui.terminal.rows;
       const layoutChanged =
-        Boolean(searchRebuilt) || terminalRows !== lastTerminalRows || searchActive !== lastSearchActive;
+        Boolean(searchRebuilt) || availableRows !== lastAvailableRows || searchActive !== lastSearchActive;
       const frameOptions: AdaptiveReviewFrameOptions<ActionId> = {
         screen: options.screen,
         allLines: search?.highlight(allLines, options.theme) ?? allLines,
@@ -124,7 +128,8 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
         searchActive,
         copyHint: copy.hint(searchActive),
         width: safeWidth,
-        terminalRows,
+        availableRows,
+        hasOuterFrame: floatingBodyRows !== undefined,
         maximumViewportSize:
           options.screen.viewportSize === "adaptive"
             ? undefined
@@ -144,7 +149,7 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
           frame = renderAdaptiveReviewFrame({ ...frameOptions, scrollOffset: correctedOffset });
         }
       }
-      lastTerminalRows = terminalRows;
+      lastAvailableRows = availableRows;
       lastSearchActive = searchActive;
       scrollOffset = frame.scrollOffset;
       lastMaximumScroll = frame.maximumScroll;
@@ -281,7 +286,8 @@ interface AdaptiveReviewFrameOptions<ActionId extends string> {
   searchActive: boolean;
   copyHint: string;
   width: number;
-  terminalRows: number;
+  availableRows: number;
+  hasOuterFrame: boolean;
   maximumViewportSize?: number;
   scrollOffset: number;
   theme: MenuScreenComponentOptions<string, ActionId>["theme"];
@@ -309,18 +315,20 @@ interface AdaptiveReviewChrome {
 function renderAdaptiveReviewFrame<ActionId extends string>(
   options: AdaptiveReviewFrameOptions<ActionId>,
 ): AdaptiveReviewFrame {
-  const totalRows = componentRows(options.terminalRows);
-  const framed = totalRows >= MIN_FRAMED_ROWS;
+  const totalRows = options.hasOuterFrame ? options.availableRows : componentRows(options.availableRows);
+  const framed = !options.hasOuterFrame && totalRows >= MIN_FRAMED_ROWS;
   const availableRows = framed ? totalRows - 2 : totalRows;
   const searchRows = options.searchLine === undefined ? 0 : 1;
   const documentRows = Math.max(0, availableRows - searchRows);
   const destination = options.screen.hint ?? "back";
   const confirmAction = options.screen.confirm ? safeMenuText(options.screen.confirm.label) : "";
   const fullHeader = [
-    ...wrapTextWithAnsi(
-      options.theme.fg("accent", options.theme.bold(safeMenuText(options.screen.title))),
-      options.width,
-    ),
+    ...(options.hasOuterFrame
+      ? []
+      : wrapTextWithAnsi(
+          options.theme.fg("accent", options.theme.bold(safeMenuText(options.screen.title))),
+          options.width,
+        )),
     ...(options.screen.lines ?? []).flatMap((line) =>
       wrapTextWithAnsi(options.theme.fg("muted", safeMenuText(line)), options.width),
     ),
@@ -435,7 +443,7 @@ function allocateAdaptiveReviewChrome(
   if (availableRows === 1) {
     return { header: [], separator: false, hint: [], showPosition: false, viewportSize: 1 };
   }
-  const compactHeader = [fullHeader[0] ?? ""];
+  const compactHeader = fullHeader.slice(0, 1);
   if (availableRows === 2) {
     return {
       header: [],
@@ -451,11 +459,11 @@ function allocateAdaptiveReviewChrome(
       separator: false,
       hint: [criticalHint],
       showPosition: false,
-      viewportSize: 1,
+      viewportSize: availableRows - compactHeader.length - 1,
     };
   }
 
-  let remainingRows = availableRows - 3 - Number(showPosition);
+  let remainingRows = availableRows - 2 - compactHeader.length - Number(showPosition);
   const reservedViewportRows = Math.min(remainingRows, Math.max(0, (maximumViewportSize ?? 1) - 1));
   remainingRows -= reservedViewportRows;
   const extraHeaderCount = Math.min(remainingRows, Math.max(0, fullHeader.length - 1));
@@ -469,7 +477,7 @@ function allocateAdaptiveReviewChrome(
     remainingRows -= fullHintExtraRows;
   }
 
-  const separator = remainingRows > 0;
+  const separator = header.length > 0 && remainingRows > 0;
   if (separator) remainingRows -= 1;
   return {
     header,

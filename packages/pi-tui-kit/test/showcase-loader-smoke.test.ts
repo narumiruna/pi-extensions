@@ -1,10 +1,13 @@
 import { mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { PI_EXTENSION_MENU_API_VERSION } from "@narumitw/pi-tui-kit";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { expect, test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
+import { createRendererHost } from "./fixtures/renderer-host.js";
+import { createShowcaseOverlay } from "./fixtures/showcase-overlay.js";
 
 test("Pi Jiti loads the repository showcase and opens its lazy Kit menu", async (t) => {
   const agentDir = mkdtempSync(path.join(os.tmpdir(), "kit-showcase-smoke-"));
@@ -35,7 +38,11 @@ test("Pi Jiti loads the repository showcase and opens its lazy Kit menu", async 
   if (!command) return;
 
   const tui = createTuiHarness({ width: 80, rows: 30 });
-  const { ctx } = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const { rendererTheme } = await import("./fixtures/renderer-theme.js");
+  const theme = rendererTheme();
+  const renderer = createRendererHost("fullscreen", theme, { width: 80, rows: 24 });
+  const overlay = createShowcaseOverlay(renderer, theme, tui.custom);
+  const { ctx } = createMockContext({ mode: "tui", hasUI: true, custom: overlay.custom });
   const running = command.handler("", ctx);
   try {
     await tui.waitForOpen();
@@ -62,6 +69,16 @@ test("Pi Jiti loads the repository showcase and opens its lazy Kit menu", async 
     tui.press("tui.input.submit");
     await tui.waitForOpen();
     expect(tui.render().join("\n")).toContain("Pi TUI Kit Showcase");
+    tui.type("floating diff");
+    tui.press("tui.select.confirm");
+    const { component, handle } = await overlay.opened;
+    const width = handle.getBounds()?.width ?? 0;
+    expect(stripVTControlCharacters(component.render(width).join("\n"))).toContain('+title = "After"');
+    renderer.send("\u001b[F");
+    expect(stripVTControlCharacters(component.render(width).join("\n"))).toContain('+theme = "dark"');
+    renderer.send("\u001b");
+    await tui.waitForOpen();
+    expect(tui.render().join("\n")).toContain("Pi TUI Kit Showcase");
     tui.press("ctrl+c");
     await running;
     expect(tui.isOpen).toBe(false);
@@ -70,6 +87,8 @@ test("Pi Jiti loads the repository showcase and opens its lazy Kit menu", async 
     expect(rpc.notifications[0]?.message).toContain("Run /tui-kit-showcase in TUI mode");
     expect(readdirSync(agentDir)).not.toContain("settings.json");
   } finally {
+    overlay.stop();
+    renderer.stop();
     tui.dispose();
   }
 });

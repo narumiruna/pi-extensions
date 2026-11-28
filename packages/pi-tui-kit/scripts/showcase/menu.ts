@@ -44,7 +44,8 @@ export type ShowcaseStandaloneInteraction =
   | "thinking"
   | "theme"
   | "native"
-  | "copy";
+  | "copy"
+  | "floatingDiff";
 
 export interface ShowcaseState {
   profile: "Minimal" | "Balanced" | "Verbose";
@@ -201,6 +202,12 @@ const SHOWCASE_ITEMS: readonly ShowcaseMenuItem[] = [
     label: "In-memory copy capture",
     description: "Synthetic exact source, failure/retry; NO OS clipboard",
     interaction: "copy",
+  },
+  {
+    id: "floating-diff",
+    label: "Floating diff",
+    description: "Read-only Git-style comparison of two synthetic text documents",
+    interaction: "floatingDiff",
   },
   { id: "close", label: "Close", close: true },
 ];
