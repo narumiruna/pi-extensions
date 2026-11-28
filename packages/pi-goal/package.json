@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-goal",
-  "version": "0.55.8",
+  "version": "0.55.9",
   "description": "Pi extension for autonomous single-objective /goal completion.",
   "type": "module",
   "license": "MIT",
@@ -48,7 +48,7 @@
     "typescript": "7.0.2"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.72.0"
+    "@narumitw/pi-tui-kit": "^0.73.0"
   },
   "repository": {
     "type": "git",

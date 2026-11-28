@@ -1,5 +1,12 @@
 # @narumitw/pi-cache-hit-monitor
 
+## 0.1.7
+
+### Patch Changes
+
+- Updated dependencies [3cbbbc5]
+  - @narumitw/pi-tui-kit@0.73.0
+
 ## 0.1.6
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-analytics",
-  "version": "0.50.3",
+  "version": "0.50.4",
   "description": "Local-first usage analytics for Pi models, skills, tools, and reliability.",
   "type": "module",
   "license": "MIT",
@@ -33,7 +33,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.72.0"
+    "@narumitw/pi-tui-kit": "^0.73.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"

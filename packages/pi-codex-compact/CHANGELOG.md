@@ -1,5 +1,12 @@
 # @narumitw/pi-codex-compact
 
+## 0.56.8
+
+### Patch Changes
+
+- Updated dependencies [3cbbbc5]
+  - @narumitw/pi-tui-kit@0.73.0
+
 ## 0.56.7
 
 ### Patch Changes
