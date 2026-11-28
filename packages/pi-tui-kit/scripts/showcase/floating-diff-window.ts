@@ -115,9 +115,9 @@ export class FloatingDiffWindow {
     const inset = minimized && width < 5 ? 0 : 1;
     const { minimize, maximize } = this.keys();
     const buttons: { action: WindowAction; label: string }[] = [];
-    if (minimize) buttons.push({ action: "minimize", label: minimized ? "[+]" : "[_]" });
-    if (!minimized && maximize) buttons.push({ action: "maximize", label: this.mode === "maximized" ? "[❐]" : "[□]" });
-    buttons.push({ action: "close", label: "[x]" });
+    if (minimize) buttons.push({ action: "minimize", label: minimized ? " + " : " − " });
+    if (!minimized && maximize) buttons.push({ action: "maximize", label: this.mode === "maximized" ? " ❐ " : " □ " });
+    buttons.push({ action: "close", label: " × " });
 
     let titleWidth = width - 2 * inset;
     const visible = buttons
@@ -135,29 +135,30 @@ export class FloatingDiffWindow {
           minimize && `${minimize} minimize`,
           maximize && `${maximize} ${this.mode === "maximized" ? "restore size" : "maximize"}`,
         ];
+    const ruleStart = !minimized && titleWidth > 0 ? "─" : "";
+    const headingWidth = titleWidth - ruleStart.length;
     const { theme, title } = this.options;
     const titleText = ` ${title}`;
     let hintText = "";
     for (const hint of hints) {
       if (!hint) continue;
       const next = `${hintText} · ${hint}`;
-      if (visibleWidth(titleText + next) <= titleWidth) hintText = next;
+      if (visibleWidth(titleText + next) <= headingWidth) hintText = next;
     }
     const heading = theme.fg("accent", theme.bold(titleText)) + theme.fg("muted", hintText);
+    const fittedHeading = truncateToWidth(heading, headingWidth, "", minimized);
+    const remaining = headingWidth - visibleWidth(fittedHeading);
+    const ruleEnd = remaining > 0 ? ` ${theme.fg("border", "─".repeat(remaining - 1))}` : "";
     let x = inset + titleWidth;
     const controls = visible.map(({ action, label }) => {
       const from = x;
       x += visibleWidth(label);
       return { action, from, to: x, label };
     });
-    const left = inset ? theme.fg("border", minimized ? "╶" : "╭") : "";
+    const left = inset ? theme.fg("border", (minimized ? "╶" : "╭") + ruleStart) : "";
     const right = inset ? theme.fg("border", minimized ? "╴" : "╮") : "";
     return {
-      line:
-        left +
-        truncateToWidth(heading, titleWidth, "", true) +
-        controls.map(({ label }) => theme.fg("text", label)).join("") +
-        right,
+      line: left + fittedHeading + ruleEnd + controls.map(({ label }) => theme.fg("text", label)).join("") + right,
       controls,
     };
   }
