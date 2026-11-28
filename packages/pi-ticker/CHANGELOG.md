@@ -1,5 +1,12 @@
 # @narumitw/pi-ticker
 
+## 0.1.10
+
+### Patch Changes
+
+- Updated dependencies [1d22c5f]
+  - @narumitw/pi-tui-kit@0.72.0
+
 ## 0.1.9
 
 ### Patch Changes
