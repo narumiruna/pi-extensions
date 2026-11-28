@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-starship",
-  "version": "0.67.7",
+  "version": "0.67.8",
   "description": "Native Starship-style TOML statusline and configuration skill for Pi.",
   "type": "module",
   "license": "MIT",
@@ -40,7 +40,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.74.0",
+    "@narumitw/pi-tui-kit": "^0.75.0",
     "re2js": "^2.10.0",
     "semver": "^7.8.6",
     "smol-toml": "^1.9.1",
