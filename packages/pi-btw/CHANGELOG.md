@@ -1,5 +1,13 @@
 # @narumitw/pi-btw
 
+## 0.64.1
+
+### Patch Changes
+
+- 1d22c5f: Share a movable, resizable floating frame between BTW and Plan Mode. Plan Mode adds an optional live, read-only Floating Plan pane that leaves focus in the main editor until explicitly activated. BTW keeps its existing floating behavior.
+- Updated dependencies [1d22c5f]
+  - @narumitw/pi-tui-kit@0.72.0
+
 ## 0.64.0
 
 ### Minor Changes

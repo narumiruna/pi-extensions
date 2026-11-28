@@ -1,5 +1,12 @@
 # @narumitw/pi-starship
 
+## 0.67.5
+
+### Patch Changes
+
+- Updated dependencies [1d22c5f]
+  - @narumitw/pi-tui-kit@0.72.0
+
 ## 0.67.4
 
 ### Patch Changes
