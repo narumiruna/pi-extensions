@@ -2,6 +2,30 @@ import { availableParallelism } from "node:os";
 import { configDefaults, defineConfig } from "vitest/config";
 import { sharedModuleTests } from "./test/shared-module-tests.js";
 
+export function testProjects(testDirectory?: string) {
+  // Put includes on the children: inherited arrays concatenate.
+  return [
+    {
+      extends: true as const,
+      test: {
+        name: "isolated",
+        include: testDirectory
+          ? [`${testDirectory}/**/*.test.ts`]
+          : ["test/**/*.test.ts", "packages/*/test/**/*.test.ts"],
+        exclude: [...configDefaults.exclude, ...sharedModuleTests],
+      },
+    },
+    {
+      extends: true as const,
+      test: {
+        name: "shared",
+        include: sharedModuleTests.filter((file) => !testDirectory || file.startsWith(`${testDirectory}/`)),
+        isolate: false,
+      },
+    },
+  ];
+}
+
 export default defineConfig({
   test: {
     environment: "node",
@@ -11,22 +35,7 @@ export default defineConfig({
       GIT_CONFIG_VALUE_0: "false",
     },
     hookTimeout: 30_000,
-    // Keep includes on the children: inherited arrays concatenate, so a root include
-    // would make the shared project run the isolated inventory too.
-    projects: [
-      {
-        extends: true,
-        test: {
-          name: "isolated",
-          include: ["test/**/*.test.ts", "packages/*/test/**/*.test.ts"],
-          exclude: [...configDefaults.exclude, ...sharedModuleTests],
-        },
-      },
-      {
-        extends: true,
-        test: { name: "shared", include: [...sharedModuleTests], isolate: false },
-      },
-    ],
+    projects: testProjects(process.env.PI_EXTENSIONS_TEST_DIRECTORY),
     globalSetup: ["./test/vitest.global-setup.ts"],
     // Integration files spawn Git, LSP, and MCP children in addition to their workers.
     // Four forks improved the matched local median without enlarging the five-second

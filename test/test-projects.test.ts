@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { test } from "vitest";
-import config from "../vitest.config.js";
+import config, { testProjects } from "../vitest.config.js";
 import { sharedModuleTests } from "./shared-module-tests.js";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -22,8 +22,7 @@ function findTests(directory: string): string[] {
 }
 
 test("every source test belongs to exactly one project and new tests default to isolation", () => {
-  const isolated = projects.find((project) => project.test.name === "isolated");
-  const shared = projects.find((project) => project.test.name === "shared");
+  const [isolated, shared] = testProjects();
   assert.ok(isolated);
   assert.ok(shared);
   assert.deepEqual(isolated.test.include, ["test/**/*.test.ts", "packages/*/test/**/*.test.ts"]);
@@ -47,6 +46,18 @@ test("every source test belongs to exactly one project and new tests default to 
   }
   assert.equal(config.test?.include, undefined, "root includes would concatenate into both projects");
   assert.equal(config.test?.exclude, undefined, "root exclusions would also exclude shared tests");
+});
+
+test("CI shards restrict both projects to exactly their own test directory", () => {
+  for (const directory of ["test", "packages/pi-sync/test", "packages/pi-tui-kit/test"]) {
+    const [isolated, shared] = testProjects(directory);
+    assert.deepEqual(isolated?.test.include, [`${directory}/**/*.test.ts`]);
+    assert.deepEqual(isolated?.test.exclude, testProjects()[0]?.test.exclude);
+    const reviewed = new Set<string>(sharedModuleTests);
+    const sharedFiles = findTests(path.join(root, directory)).filter((file) => reviewed.has(file));
+    assert.deepEqual(shared?.test.include.toSorted(), sharedFiles.sort());
+    assert.equal(shared?.test.isolate, false);
+  }
 });
 
 test("both projects inherit the same bounded fork pool and timeout safeguards", () => {

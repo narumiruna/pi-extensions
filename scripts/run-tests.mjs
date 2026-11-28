@@ -10,7 +10,13 @@ import { changedFilesSince, selectAffectedTests } from "./select-affected-tests.
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-export function runTests({ root = repositoryRoot, env = process.env, execute = spawnSync, log = console.log } = {}) {
+export function runTests({
+  args = [],
+  root = repositoryRoot,
+  env = process.env,
+  execute = spawnSync,
+  log = console.log,
+} = {}) {
   const outDir = path.join(root, "node_modules", ".cache", "pi-extensions-test");
   const tsc = path.join(root, "node_modules", "typescript", "bin", "tsc");
   const vitest = path.join(root, "node_modules", "vitest", "vitest.mjs");
@@ -20,6 +26,29 @@ export function runTests({ root = repositoryRoot, env = process.env, execute = s
   } catch {
     console.warn("Could not clear the previous test timing report; it may be stale.");
   }
+  const prepareCI = args.length === 1 && args[0] === "--prepare-ci";
+  if (args.length === 2 && args[0] === "--ci-shard") {
+    const shard = args[1];
+    const directory = shard === "root" ? "test" : isWorkspaceDirectory(shard) ? `packages/${shard}/test` : undefined;
+    if (!directory || !hasTestFile(path.join(root, directory))) {
+      console.error(`No test files for CI shard: ${JSON.stringify(shard)}.`);
+      return 1;
+    }
+    if (!fs.statSync(outDir, { throwIfNoEntry: false })?.isDirectory()) {
+      console.error("Missing compiled CI test inputs; restore the check job artifact first.");
+      return 1;
+    }
+    return runVitest([], directory);
+  }
+  if (args.length > 0 && !prepareCI) {
+    console.error("Expected no arguments, --prepare-ci, or --ci-shard <root|package-directory>.");
+    return 1;
+  }
+  if (prepareCI && !env.GITHUB_OUTPUT) {
+    console.error("Expected GITHUB_OUTPUT when preparing CI tests.");
+    return 1;
+  }
+
   const missingTests = activeExtensionDirectories(path.join(root, "packages"))
     .filter((extensionDir) => !hasTestFile(path.join(extensionDir, "test")))
     .map((extensionDir) => path.relative(root, extensionDir));
@@ -31,6 +60,7 @@ export function runTests({ root = repositoryRoot, env = process.env, execute = s
   const selection = testSelection(root, env);
   if (selection.mode === "skip") {
     log(`Skipping tests: ${selection.reason}.`);
+    if (prepareCI) writeCIPlan(env.GITHUB_OUTPUT, false, []);
     return 0;
   }
   log(
@@ -57,6 +87,27 @@ export function runTests({ root = repositoryRoot, env = process.env, execute = s
   const compilationStatus = run("Test compilation", process.execPath, [tsc, "-p", "tsconfig.test.json"]);
   if (compilationStatus !== 0) return compilationStatus;
 
+  if (prepareCI) {
+    const candidates =
+      selection.mode === "full"
+        ? fs
+            .readdirSync(path.join(root, "packages"), { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => entry.name)
+        : selection.workspaceDirectories;
+    const packages = candidates.filter((directory) => hasTestFile(path.join(root, "packages", directory, "test")));
+    if (packages.some((directory) => !isWorkspaceDirectory(directory))) {
+      console.error("Invalid workspace test directory in CI plan.");
+      return 1;
+    }
+    if (selection.includeRootTests && !hasTestFile(path.join(root, "test"))) {
+      console.error("No selected root test files found.");
+      return 1;
+    }
+    writeCIPlan(env.GITHUB_OUTPUT, selection.includeRootTests, packages.sort());
+    return 0;
+  }
+
   const sourceTestFiles = [
     ...findFiles(path.join(root, "test"), ".test.ts"),
     ...findFiles(path.join(root, "packages"), ".test.ts"),
@@ -67,24 +118,36 @@ export function runTests({ root = repositoryRoot, env = process.env, execute = s
     return 1;
   }
 
-  const canonicalTempDir = fs.realpathSync(os.tmpdir());
   // Full-suite discovery belongs to Vitest's configured projects, not a Windows-sized argv inventory.
-  const filters = selection.mode === "full" ? [] : testFiles;
-  return run("Vitest", process.execPath, [vitest, "run", ...filters], {
-    ...env,
-    // Cache bytecode, not module instances: isolated forks keep fresh runtime state.
-    // Honor Node's overrides and do not opt external V8 coverage into less precise
-    // source positions. Vitest also disables caching in its precise-coverage workers
-    // and flushes each fork's cache before teardown.
-    NODE_COMPILE_CACHE:
-      env.NODE_COMPILE_CACHE ??
-      (env.NODE_V8_COVERAGE === undefined
-        ? path.join(root, "node_modules", ".cache", "pi-extensions-node-compile-cache")
-        : undefined),
-    TMPDIR: canonicalTempDir,
-    TMP: canonicalTempDir,
-    TEMP: canonicalTempDir,
-  });
+  return runVitest(selection.mode === "full" ? [] : testFiles);
+
+  function runVitest(filters, directory) {
+    const canonicalTempDir = fs.realpathSync(os.tmpdir());
+    return run("Vitest", process.execPath, [vitest, "run", ...filters], {
+      ...env,
+      PI_EXTENSIONS_TEST_DIRECTORY: directory,
+      // Cache bytecode, not module instances: isolated forks keep fresh runtime state.
+      // Honor Node's overrides and do not opt external V8 coverage into less precise
+      // source positions. Vitest also disables caching in its precise-coverage workers
+      // and flushes each fork's cache before teardown.
+      NODE_COMPILE_CACHE:
+        env.NODE_COMPILE_CACHE ??
+        (env.NODE_V8_COVERAGE === undefined
+          ? path.join(root, "node_modules", ".cache", "pi-extensions-node-compile-cache")
+          : undefined),
+      TMPDIR: canonicalTempDir,
+      TMP: canonicalTempDir,
+      TEMP: canonicalTempDir,
+    });
+  }
+}
+
+function isWorkspaceDirectory(directory) {
+  return /^pi-[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(directory);
+}
+
+function writeCIPlan(output, testRoot, packages) {
+  fs.appendFileSync(output, `test-root=${testRoot}\npackages=${JSON.stringify(packages)}\n`);
 }
 
 function testSelection(root, env) {
@@ -144,5 +207,5 @@ function findFiles(directory, suffix) {
 }
 
 if (import.meta.main) {
-  process.exitCode = runTests();
+  process.exitCode = runTests({ args: process.argv.slice(2) });
 }
