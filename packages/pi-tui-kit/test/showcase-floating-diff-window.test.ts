@@ -72,16 +72,30 @@ test("native mouse controls keep a single overlay and restore the dragged and re
   expect(w.header()).toMatch(/^╭─ Floating diff.*─+ − {2}❐ {2}× ╮$/u);
   expect(w.frame().at(-1)).not.toContain("◢");
   for (const start of [
-    { x: 2, y: 0 },
+    { x: 0, y: 0 },
+    { x: 1, y: 0 },
+    { x: 3, y: 0 },
+    { x: 79, y: 0 },
+    { x: 0, y: 10 },
+    { x: 79, y: 10 },
+    { x: 0, y: 19 },
+    { x: 40, y: 19 },
     { x: 78, y: 19 },
+    { x: 79, y: 19 },
   ]) {
+    const end = { x: start.x + (start.x < 40 ? 2 : -2), y: start.y + (start.y < 10 ? 2 : -2) };
     w.pointer(0, start);
-    w.pointer(32, { x: start.x - 1, y: start.y });
-    w.pointer(0, { x: start.x - 1, y: start.y }, true);
+    w.pointer(32, end);
+    w.pointer(0, end, true);
     expect(w.rect()).toEqual(maximized);
   }
   w.click("−");
-  expect(w.rect()).toEqual({ col: 8, row: 19, width: 64, height: 1 });
+  const minimized = { col: 8, row: 19, width: 64, height: 1 };
+  expect(w.rect()).toEqual(minimized);
+  w.pointer(0, { x: 8, y: 19 });
+  w.pointer(32, { x: 6, y: 17 });
+  w.pointer(0, { x: 6, y: 17 }, true);
+  expect(w.rect()).toEqual(minimized);
   expect(w.header()).toMatch(/ \+ {2}× ╴$/u);
   w.click("+");
   expect(w.rect()).toEqual(maximized);
@@ -93,6 +107,29 @@ test("native mouse controls keep a single overlay and restore the dragged and re
   expect(w.overlay.completions).toBe(1);
   expect(w.renderer.host.getFocusedComponent()).toBe(w.renderer.editor);
   expect(w.renderer.editor.getValue()).toBe("main draft");
+});
+
+test("the showcase top rule and corner resize beside the title and controls", async (t) => {
+  const w = await openDemo(t, "fullscreen");
+  const initial = w.rect();
+  const rule = w.at("─");
+  const dragPointer = (button: number, start: Point, end: Point) => {
+    w.pointer(button, start);
+    w.pointer(32 + button, end);
+    w.pointer(button, end, true);
+  };
+  const above = { x: rule.x + 2, y: rule.y - 1 };
+  dragPointer(2, rule, above);
+  expect(w.rect()).toEqual(initial);
+  dragPointer(0, rule, above);
+  const taller = { ...initial, row: initial.row - 1, height: initial.height + 1 };
+  expect(w.rect()).toEqual(taller);
+
+  const corner = { x: taller.col + taller.width - 1, y: taller.row };
+  dragPointer(0, corner, { x: corner.x - 3, y: corner.y + 1 });
+  expect(w.rect()).toEqual({ ...initial, width: initial.width - 3 });
+  w.click("×", 1);
+  await expect(w.running).resolves.toBe(true);
 });
 
 test("a narrow title shares the top border and leaves the first diff line visible", async (t) => {

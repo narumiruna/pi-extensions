@@ -97,7 +97,7 @@ export class FloatingDiffWindow {
       requestRender: () => this.options.tui.requestRender(),
       styleBorder: (text) => this.options.theme.fg("border", text),
       styleTitle: (text) => text,
-      title: () => "",
+      title: (columns) => this.titleBar(columns + 2).moveTitle,
       body: this.options.body,
     });
   }
@@ -109,9 +109,8 @@ export class FloatingDiffWindow {
     };
   }
 
-  private titleBar(width: number, height: number) {
+  private titleBar(width: number) {
     const minimized = this.mode === "minimized";
-    if (!minimized && (width < 3 || height < 3)) return undefined;
     const inset = minimized && width < 5 ? 0 : 1;
     const { minimize, maximize } = this.keys();
     const buttons: { action: WindowAction; label: string }[] = [];
@@ -159,6 +158,7 @@ export class FloatingDiffWindow {
     const right = inset ? theme.fg("border", minimized ? "╴" : "╮") : "";
     return {
       line: left + fittedHeading + ruleEnd + controls.map(({ label }) => theme.fg("text", label)).join("") + right,
+      moveTitle: fittedHeading,
       controls,
     };
   }
@@ -166,13 +166,13 @@ export class FloatingDiffWindow {
   render(width: number): string[] {
     const { height } = this.bounds;
     if (width <= 0 || height <= 0) return [];
-    const title = this.titleBar(width, height);
-    if (this.mode === "minimized") return title ? [title.line] : [];
+    if (this.mode === "minimized") return [this.titleBar(width).line];
     const rows = this.frame.render(width);
-    if (!title) return rows;
+    if (width < 3 || height < 3) return rows;
+    const title = this.titleBar(width).line;
     return this.mode === "maximized"
-      ? [title.line, ...rows.slice(1, -1), this.options.theme.fg("border", `╰${"─".repeat(width - 2)}╯`)]
-      : [title.line, ...rows.slice(1)];
+      ? [title, ...rows.slice(1, -1), this.options.theme.fg("border", `╰${"─".repeat(width - 2)}╯`)]
+      : [title, ...rows.slice(1)];
   }
 
   invalidate(): void {
@@ -201,10 +201,10 @@ export class FloatingDiffWindow {
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     if (!this.options.isCurrent()) return undefined;
     const bounds = this.bounds;
+    const framed = bounds.width >= 3 && bounds.height >= 3;
     const action =
-      event.y === 0
-        ? this.titleBar(bounds.width, bounds.height)?.controls.find(({ from, to }) => event.x >= from && event.x < to)
-            ?.action
+      event.y === 0 && (framed || this.mode === "minimized")
+        ? this.titleBar(bounds.width).controls.find(({ from, to }) => event.x >= from && event.x < to)?.action
         : undefined;
 
     if (event.type === "press") {
@@ -226,11 +226,10 @@ export class FloatingDiffWindow {
     if (this.mode === "minimized") return undefined;
     if (
       this.mode === "maximized" &&
-      bounds.width >= 3 &&
-      bounds.height >= 3 &&
+      framed &&
       event.type === "press" &&
       event.button === "left" &&
-      (event.y === 0 || (event.y === bounds.height - 1 && event.x >= bounds.width - 2))
+      (event.y === 0 || event.y === bounds.height - 1 || event.x === 0 || event.x === bounds.width - 1)
     ) {
       return { handled: true };
     }

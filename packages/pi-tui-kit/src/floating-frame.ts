@@ -5,6 +5,7 @@ import {
   type TuiMouseEvent,
   type TuiMouseEventResult,
   truncateToWidth,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
 
 export interface FloatingViewport {
@@ -38,10 +39,14 @@ export interface FloatingFrameOptions {
   };
 }
 
+type ResizeDirection = -1 | 0 | 1;
+
 export class FloatingFrame implements Component, Focusable {
   readonly overlayOptions: OverlayOptions;
   private preferred: FloatingBounds | undefined;
-  private drag: { start: FloatingBounds; x: number; y: number; resize: boolean } | undefined;
+  private drag:
+    | { start: FloatingBounds; x: number; y: number; horizontal: ResizeDirection; vertical: ResizeDirection }
+    | undefined;
   private bodyPress = false;
   private isFocused = false;
 
@@ -66,15 +71,7 @@ export class FloatingFrame implements Component, Focusable {
 
   get bounds(): FloatingBounds {
     const size = this.terminalSize();
-    const preferred = this.preferred ?? this.options.initialBounds(size);
-    const width = clamp(preferred.width, this.options.minSize.columns, size.columns);
-    const height = clamp(preferred.height, this.options.minSize.rows, size.rows);
-    return {
-      width,
-      height,
-      col: clamp(preferred.col, 0, size.columns - width),
-      row: clamp(preferred.row, 0, size.rows - height),
-    };
+    return this.fitBounds(this.preferred ?? this.options.initialBounds(size), size);
   }
 
   get viewport(): FloatingViewport {
@@ -92,11 +89,11 @@ export class FloatingFrame implements Component, Focusable {
   }
 
   move(dx: number, dy: number): void {
-    this.adjust(this.bounds, dx, dy, false);
+    this.moveFrom(this.bounds, dx, dy);
   }
 
   resize(dx: number, dy: number): void {
-    this.adjust(this.bounds, dx, dy, true);
+    this.resizeFrom(this.bounds, dx, dy, 1, 1);
   }
 
   invalidate(): void {
@@ -119,9 +116,11 @@ export class FloatingFrame implements Component, Focusable {
       return inset ? border("│") + line + border("│") : line;
     });
     if (!inset) return lines;
-    const label = truncateToWidth(this.options.title(viewport.columns), viewport.columns, "", true);
+    const label = this.titleLabel(viewport.columns);
     return [
-      border("╭") + this.options.styleTitle(label) + border("╮"),
+      border("╭─") +
+        this.options.styleTitle(label) +
+        border(`${"─".repeat(viewport.columns - 1 - visibleWidth(label))}╮`),
       ...lines,
       border(`╰${"─".repeat(viewport.columns - 1)}◢╯`),
     ];
@@ -129,19 +128,28 @@ export class FloatingFrame implements Component, Focusable {
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     if (this.drag && (event.type === "drag" || event.type === "release")) {
-      const { start, x, y, resize } = this.drag;
-      this.adjust(start, event.screenX - x, event.screenY - y, resize);
+      const { start, x, y, horizontal, vertical } = this.drag;
+      const dx = event.screenX - x;
+      const dy = event.screenY - y;
       if (event.type === "release") this.drag = undefined;
+      if (horizontal || vertical) this.resizeFrom(start, dx, dy, horizontal, vertical);
+      else this.moveFrom(start, dx, dy);
       return { handled: true };
     }
-    const framed = hasFrame(event.width, event.height);
+    const { x, y, width, height } = event;
+    const framed = hasFrame(width, height);
     if (event.type === "press") {
       this.drag = undefined;
       this.bodyPress = false;
-      const resize = event.x >= event.width - 2 && event.y === event.height - 1;
-      if (event.button === "left" && framed && (resize || event.y === 0)) {
-        this.drag = { start: this.bounds, x: event.screenX, y: event.screenY, resize };
-        return this.options.focusOnDrag ? { capture: true, focus: true } : { capture: true };
+      if (event.button === "left" && framed && x >= 0 && x < width && y >= 0 && y < height) {
+        const bottom = y === height - 1;
+        const horizontal = x === 0 ? -1 : x === width - 1 || (bottom && x === width - 2) ? 1 : 0;
+        const onTitle = y === 0 && x >= 2 && x < 2 + visibleWidth(this.titleLabel(width - 2));
+        const vertical = onTitle ? 0 : y === 0 ? -1 : bottom ? 1 : 0;
+        if (horizontal || vertical || onTitle) {
+          this.drag = { start: this.bounds, x: event.screenX, y: event.screenY, horizontal, vertical };
+          return this.options.focusOnDrag ? { capture: true, focus: true } : { capture: true };
+        }
       }
     }
     const inset = framed ? 1 : 0;
@@ -165,31 +173,67 @@ export class FloatingFrame implements Component, Focusable {
     return result;
   }
 
+  private titleLabel(innerColumns: number): string {
+    return truncateToWidth(this.options.title(innerColumns).trimEnd(), innerColumns - 1, "");
+  }
+
   private terminalSize(): FloatingViewport {
     const { columns, rows } = this.options.getTerminalSize();
     return { columns: nonnegativeInteger(columns), rows: nonnegativeInteger(rows) };
   }
 
-  private adjust(start: FloatingBounds, dx: number, dy: number, resize: boolean): void {
-    const { columns, rows } = this.terminalSize();
-    const { width, height } = start;
-    const col = clamp(start.col, 0, columns - nonnegativeInteger(this.options.minSize.columns));
-    const row = clamp(start.row, 0, rows - nonnegativeInteger(this.options.minSize.rows));
-    this.preferred = resize
-      ? {
-          col,
-          row,
-          width: clamp(width + dx, this.options.minSize.columns, columns - col),
-          height: clamp(height + dy, this.options.minSize.rows, rows - row),
-        }
-      : {
-          width,
-          height,
-          col: clamp(start.col + dx, 0, Math.max(0, columns - width)),
-          row: clamp(start.row + dy, 0, Math.max(0, rows - height)),
-        };
+  private fitBounds(bounds: FloatingBounds, size: FloatingViewport): FloatingBounds {
+    const width = clamp(bounds.width, this.options.minSize.columns, size.columns);
+    const height = clamp(bounds.height, this.options.minSize.rows, size.rows);
+    return {
+      width,
+      height,
+      col: clamp(bounds.col, 0, size.columns - width),
+      row: clamp(bounds.row, 0, size.rows - height),
+    };
+  }
+
+  private moveFrom(start: FloatingBounds, dx: number, dy: number): void {
+    this.preferred = this.fitBounds({ ...start, col: start.col + dx, row: start.row + dy }, this.terminalSize());
     this.options.requestRender();
   }
+
+  private resizeFrom(
+    start: FloatingBounds,
+    dx: number,
+    dy: number,
+    horizontal: ResizeDirection,
+    vertical: ResizeDirection,
+  ): void {
+    const size = this.terminalSize();
+    const bounds = this.fitBounds(start, size);
+    const [col, width] = resizeAxis(
+      bounds.col,
+      bounds.width,
+      dx,
+      this.options.minSize.columns,
+      size.columns,
+      horizontal,
+    );
+    const [row, height] = resizeAxis(bounds.row, bounds.height, dy, this.options.minSize.rows, size.rows, vertical);
+    this.preferred = { col, row, width, height };
+    this.options.requestRender();
+  }
+}
+
+function resizeAxis(
+  origin: number,
+  length: number,
+  delta: number,
+  min: number,
+  limit: number,
+  direction: ResizeDirection,
+): [number, number] {
+  if (direction === 0) return [origin, length];
+  if (direction === 1) return [origin, clamp(length + delta, min, limit - origin)];
+  const end = origin + length;
+  const nextLength = clamp(length - delta, min, end);
+  return [end - nextLength, nextLength];
 }
 
 function hasFrame(width: number, height: number): boolean {
