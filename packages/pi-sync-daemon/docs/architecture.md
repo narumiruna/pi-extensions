@@ -102,9 +102,12 @@ cannot confirm the capture outcome, it directs the user to reload and reconcile 
 on the same connection.
 
 The capture has a 30-second time limit. Both local scan scopes enforce entry, file, byte, and path
-depth budgets. An agent-directory scan uses a separate fixed settings limit to determine the session
-root; it counts selected settings content once. A review limits selected bytes to 64 MiB and paths
-to 64 segments. Before remote policy filtering, WebDAV and S3 limit both the downloaded gzip
+depth budgets. A root file has depth one. A bounded scan can skip a missing optional path only at
+discovery. If a discovered path disappears during traversal or reading, the scan refuses the
+capture without returning a partial comparison. An agent-directory scan uses a separate fixed
+settings limit to determine the session root; it counts selected settings content once. A review
+limits selected bytes to 64 MiB and paths to 64 segments. Before remote policy filtering, WebDAV
+and S3 limit both the downloaded gzip
 artifact and its decompressed JSON to 64 MiB each. A review requires the artifact without extra HTTP
 content encoding so it can bound the response bytes. Git checks the validated manifest's total file
 size against 64 MiB before reading blobs from its cache. This does not limit what Git fetches or

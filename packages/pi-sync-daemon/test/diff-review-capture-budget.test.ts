@@ -54,6 +54,30 @@ test("agent-directory capture admits exactly the examined entries and eligible f
     }
   }));
 
+test.each([scope, { include: ["AGENTS.md"] }])(
+  "capture rejects depth zero and accepts depth one for a root file (%j)",
+  (options) =>
+    fixture(async (root) => {
+      await fs.writeFile(path.join(root, "AGENTS.md"), "abc");
+      const exact = { bytes: 3, files: 1, entries: 1, depth: 1 };
+      const open = vi.spyOn(fs, "open");
+      try {
+        await assert.rejects(
+          createSnapshot("test", options, createSnapshotCaptureLimits({ ...exact, depth: 0 })),
+          SnapshotCaptureLimitError,
+        );
+        assert.equal(open.mock.calls.length, 0);
+        const captured = await createSnapshot("test", options, createSnapshotCaptureLimits(exact));
+        assert.deepEqual(
+          captured.files.map(({ path }) => path),
+          ["AGENTS.md"],
+        );
+      } finally {
+        open.mockRestore();
+      }
+    }),
+);
+
 test("agent-directory capture charges selected settings once, apart from fixed-budget routing reads", () =>
   fixture(async (root) => {
     const settingsPath = path.join(root, "settings.json");
@@ -104,6 +128,45 @@ test("included-path capture shares settings, entry, and payload accounting", () 
       await assert.rejects(createSnapshot("test", options, limits), SnapshotCaptureLimitError, bound);
     }
   }));
+
+test("bounded capture can skip optional paths that are missing at discovery", () =>
+  fixture(async (root) => {
+    await fs.writeFile(path.join(root, "AGENTS.md"), "abc");
+    const limits = createSnapshotCaptureLimits({ bytes: 3, files: 1, entries: 1, depth: 2 });
+    const captured = await createSnapshot("test", { include: ["AGENTS.md", "notes/missing.md", "sessions"] }, limits);
+    assert.deepEqual(
+      captured.files.map(({ path }) => path),
+      ["AGENTS.md"],
+    );
+  }));
+
+const missingAfterDiscovery = [
+  ["custom file", "notes/note.md", "notes/note.md"],
+  ["custom directory child", "notes", "notes/note.md"],
+  ["session child", "sessions", "sessions/active.jsonl"],
+  ["routing settings", "sessions", "settings.json"],
+] as const;
+
+test.each(missingAfterDiscovery)("bounded capture rejects a missing %s after discovery", (_kind, include, removed) =>
+  fixture(async (root) => {
+    const file = path.join(root, removed);
+    await fs.writeFile(path.join(root, "AGENTS.md"), "keep");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, removed === "settings.json" ? "{}" : "remove");
+    const originalOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, "open").mockImplementation(async (source, ...args) => {
+      if (source === file) await fs.unlink(file);
+      return originalOpen(source, ...args);
+    });
+    try {
+      const limits = createSnapshotCaptureLimits({ bytes: 64, files: 4, entries: 8, depth: 3 });
+      await assert.rejects(createSnapshot("test", { include: ["AGENTS.md", include] }, limits), { code: "ENOENT" });
+      assert.ok(open.mock.calls.some(([source]) => source === file));
+    } finally {
+      open.mockRestore();
+    }
+  }),
+);
 
 test("agent-directory capture still rejects eligible hard links before opening them", () =>
   fixture(async (root) => {

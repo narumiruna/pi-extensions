@@ -18,9 +18,10 @@ const privateFailure = "Synthetic RPC failure with a private detail";
 
 async function withReviewServer<T>(
   run: (fixture: RpcFixture, facts: ClientFacts, signals: Map<string, AbortSignal>) => Promise<T>,
+  temporaryParent = os.tmpdir(),
 ) {
   await using resources = new AsyncDisposableStack();
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "drl-"));
+  const temporary = await fs.mkdtemp(path.join(temporaryParent, "drl-"));
   resources.defer(() => fs.rm(temporary, { recursive: true, force: true }));
   const root = await fs.realpath(temporary);
   const runtime = await runtimePaths(root);
@@ -68,11 +69,13 @@ async function withRelay<T>(
   run: (client: DaemonConnection) => Promise<T>,
 ) {
   await using resources = new AsyncDisposableStack();
-  const paths = daemonPaths({ ...server.paths, directory: path.join(facts.cwd, "relay") }, server.identity.instance);
+  const parent = path.dirname(server.paths.directory);
+  const directory = path.join(parent, `relay-${randomUUID().replaceAll("-", "").slice(0, 10)}`);
+  const paths = daemonPaths({ ...server.paths, directory }, server.identity.instance);
   if (paths.endpointDirectory) {
-    await privateDirectory(paths.endpointDirectory);
-    const directory = paths.endpointDirectory;
-    resources.defer(() => fs.rm(directory, { recursive: true, force: true }));
+    const endpointDirectory = paths.endpointDirectory;
+    await privateDirectory(endpointDirectory);
+    resources.defer(() => fs.rm(endpointDirectory, { recursive: true, force: true }));
   }
   const relay = createServer(async (request, response) => {
     const disconnected = new AbortController();
@@ -110,6 +113,27 @@ async function openReview(client: DaemonConnection) {
   assert.equal(inventory.kind, "review");
   return { id: inventory.id, fileId: inventory.files[0].id };
 }
+
+test("the relay endpoint stays short when the agent directory is long", async () => {
+  await using resources = new AsyncDisposableStack();
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "drl-long-"));
+  resources.defer(() => fs.rm(temporary, { recursive: true, force: true }));
+  const longParent = path.join(temporary, "agent-directory-".repeat(6));
+  await fs.mkdir(longParent);
+  await withReviewServer(async (fixture, facts) => {
+    assert.ok(Buffer.byteLength(facts.cwd) > 103);
+    await withRelay(
+      fixture,
+      facts,
+      (_call, _response, forward) => forward(),
+      async (client) => {
+        assert.equal(path.dirname(client.paths.directory), path.dirname(fixture.server.paths.directory));
+        const { id, fileId } = await openReview(client);
+        assert.equal((await client.readDiffReview(id, fileId)).kind, "diff");
+      },
+    );
+  }, longParent);
+});
 
 function holdPreviewReply() {
   const reached = Promise.withResolvers<unknown>();

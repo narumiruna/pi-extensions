@@ -264,14 +264,20 @@ async function collectSelectedFiles<T extends { path: string }>(
     if (!excluded(relativePath)) await collectIncludedPath(results, root, relativePath, collection);
   }
   if (selection.sessions && !excluded("sessions")) {
+    const sessionRoot = sessionStorageRoot(root, options.sessionDir);
+    let discovered = false;
     try {
-      await collectDirectory(results, sessionStorageRoot(root, options.sessionDir), "", {
+      if (limits) {
+        await fs.lstat(sessionRoot);
+        discovered = true;
+      }
+      await collectDirectory(results, sessionRoot, "", {
         ...collection,
         sessionsOnly: true,
         virtualPrefix: "sessions",
       });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (discovered || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
   signal?.throwIfAborted();
@@ -434,6 +440,8 @@ async function collectAgentDirectory<T extends { path: string }>(
       if (!sessions && (/^sessions(?:\/|$)/iu.test(snapshotPath) || isPhysicalSessionPath(snapshotPath))) continue;
       if (entry.isDirectory() ? !canTraverse(snapshotPath) : !entry.isFile() || excluded(snapshotPath)) continue;
       if (!entry.isDirectory() && sessions && !isSessionFilePath(snapshotPath)) continue;
+      if (limits && !entry.isDirectory() && snapshotPath.split("/").length > limits.maxDepth)
+        throw new SnapshotCaptureLimitError();
       const candidate = await identify(
         path.join(directory.absolute, entry.name),
         path.join(directory.canonical, entry.name),
@@ -538,13 +546,15 @@ async function collectIncludedPath<T>(
   const { signal } = options;
   signal?.throwIfAborted();
   const absolutePath = safeJoin(root, relativePath);
+  let discovered = false;
   try {
     const stat = await fs.lstat(absolutePath);
+    discovered = true;
     signal?.throwIfAborted();
     if (stat.isFile()) await addFile(results, root, relativePath, relativePath, options);
     else if (stat.isDirectory()) await collectDirectory(results, root, relativePath, options);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if ((options.limits && discovered) || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     if (!relativePath.includes("/")) {
       const entries = await (options.limits
         ? options.limits.readEntries(root, signal)
