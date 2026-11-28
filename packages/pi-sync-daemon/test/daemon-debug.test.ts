@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { test, vi } from "vitest";
+import { requestDaemon } from "../src/client.js";
 import { createDaemonDebug } from "../src/daemon-debug.js";
 import type { DebugEvent } from "../src/engine/debug-log.js";
 import { DEBUG_LOG_FILENAME } from "../src/engine/paths.js";
@@ -13,7 +14,7 @@ import * as configFile from "../src/engine/settings/config-file.js";
 import { validateSettingsDocument } from "../src/engine/settings/settings-validation.js";
 import { createEngineService } from "../src/engine-service.js";
 import { publishIdentity, runtimePaths } from "../src/identity.js";
-import type { ClientFacts } from "../src/protocol.js";
+import type { ClientFacts, PollReply } from "../src/protocol.js";
 import { withRpcServer } from "./rpc-server-fixture.js";
 
 async function fixture(run: (root: string) => Promise<void>) {
@@ -208,6 +209,49 @@ test("the same owner samples settings at job boundaries and logs only fixed outc
       spy.mockRestore();
     }
   }));
+
+test.each(["completed", "failed"] as const)("an inspection that %s waits for its debug log attempt", (outcome) =>
+  fixture(async (root) => {
+    const recording = Promise.withResolvers<string | undefined>();
+    const release = Promise.withResolvers<void>();
+    await withRpcServer(
+      root,
+      async () => {
+        if (outcome === "failed") throw new Error("Inspection denied.");
+        return "summary";
+      },
+      async ({ server, createConnection }) => {
+        const peer = facts(root, true);
+        const client = await createConnection(peer, { callback: async () => null }).attach();
+        const result = client.run("inspect", {});
+        const completed =
+          outcome === "failed"
+            ? assert.rejects(result, /Inspection denied/u)
+            : result.then((value) => assert.equal(value, "summary"));
+        void completed.catch(() => {});
+        try {
+          const job = await recording.promise;
+          assert.ok(job);
+          const poll = (await requestDaemon(server.paths, server.identity, "poll", {
+            client: peer.id,
+            job,
+          })) as PollReply;
+          assert.equal(poll.job?.phase, "running");
+        } finally {
+          release.resolve();
+          await completed;
+        }
+      },
+      {
+        diagnostic(event) {
+          if (event.event !== "job" || event.operation !== "inspect" || event.outcome !== outcome) return;
+          recording.resolve(event.operationId);
+          return release.promise;
+        },
+      },
+    );
+  }),
+);
 
 test("diagnostics reject stale reads before append and do not acquire settings locks", () =>
   fixture(async (root) => {

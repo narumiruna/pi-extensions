@@ -98,7 +98,7 @@ Ctrl+C: close all demo overlays, including under neste
 
 From the checkout root, run `npm run showcase:tui-kit`, open `/tui-kit-showcase`, and select **Floating diff**. The overlay compares two in-memory text fixtures with three context lines per change. It shows a notice instead of a partial result if the combined input, output, or diff work exceeds its preview bound. It does not read user files, call Git, or accept changes. It does not add a published API or a side-by-side layout.
 
-With Pi fullscreen mouse input enabled, click `[_]` to collapse the diff into a one-line title at the bottom, or `[+]` to restore it in its previous mode. The minimized title keeps keyboard focus so you can restore or close it. Click `[□]` to use the entire visible Pi terminal area, or `[❐]` to restore the saved size and position. Maximizing does not change the terminal mode. Click `[x]` for the same return to Showcase as the configured cancel key or Ctrl+C. If another overlay has focus, clicking the diff's `[x]` closes only the diff without reopening the menu over the focused overlay.
+With Pi fullscreen mouse input enabled, click `−` to collapse the diff into a one-line title at the bottom, or `+` to restore it in its previous mode. The minimized title keeps keyboard focus so you can restore or close it. Click `□` to use the entire visible Pi terminal area, or `❐` to restore the saved size and position. Maximizing does not change the terminal mode. Click `×` for the same return to Showcase as the configured cancel key or Ctrl+C. The blank cells on each side of an icon are part of its click target. The normal and maximized title share the top border, so they do not use an extra document row. If another overlay has focus, clicking the diff's `×` closes only the diff without reopening the menu over the focused overlay.
 
 In either TUI mode, `m` minimizes or restores and `z` maximizes or restores the normal size. If those keys conflict with a native action, the title uses `u` or `w` if available; if neither candidate is available for an action, that action is omitted. Pi regular mode does not send mouse clicks to the overlay. If the host consumes Ctrl+C first, the demo warns instead of opening.
 
@@ -109,7 +109,7 @@ The following component frames came from Pi's fullscreen renderer harness, with 
 Wide, top of the diff (72 columns × 16 rows):
 
 ```text
-╭ Floating diff · m minimize · z maximize                     [_][□][x]╮
+╭─ Floating diff · m minimize · z maximize ─────────────────── −  □  × ╮
 │--- a/settings.toml                                                   │
 │+++ b/settings.toml                                                   │
 │@@ -1,6 +1,6 @@                                                       │
@@ -130,16 +130,16 @@ Wide, top of the diff (72 columns × 16 rows):
 In the same 80-column terminal, the minimized title (64 columns) and the top of the maximized diff (80 columns):
 
 ```text
-╶ Floating diff · m restore · ctrl+c close               [+][x]╴
+╶ Floating diff · m restore · ctrl+c close                +  × ╴
 
-╭ Floating diff · m minimize · z restore size                         [_][❐][x]╮
+╭─ Floating diff · m minimize · z restore size ─────────────────────── −  ❐  × ╮
 │--- a/settings.toml                                                           │
 ```
 
 Narrow end after restoring and resizing (32 columns × 9 rows):
 
 ```text
-╭ Floating diff       [_][□][x]╮
+╭─ Floating diff ───── −  □  × ╮
 │-theme = "light"              │
 │+message = "你好 🙂 — a long l│
 │ine that wraps inside the wind│

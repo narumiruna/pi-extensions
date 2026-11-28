@@ -33,14 +33,15 @@ async function openDemo(t: TestContext, mode: Mode, options: Parameters<typeof c
   const header = () => frame()[0] ?? "";
   const at = (label: string): Point => {
     const title = header();
-    const index = title.indexOf(label);
+    const index = title.lastIndexOf(label);
     if (index < 0) throw new Error(`Missing ${label} in ${title}`);
     return { x: rect().col + visibleWidth(title.slice(0, index)), y: rect().row };
   };
   const pointer = (button: number, { x, y }: Point, release = false) =>
     renderer.send(`\x1b[<${button};${x + 1};${y + 1}${release ? "m" : "M"}`);
-  const click = (label: string) => {
-    const point = at(label);
+  const click = (label: string, cellOffset = 0) => {
+    const { x, y } = at(label);
+    const point = { x: x + cellOffset, y };
     pointer(0, point);
     pointer(0, point, true);
   };
@@ -49,7 +50,7 @@ async function openDemo(t: TestContext, mode: Mode, options: Parameters<typeof c
 
 test("native mouse controls keep a single overlay and restore the dragged and resized bounds", async (t) => {
   const w = await openDemo(t, "fullscreen");
-  expect(w.header()).toMatch(/\[_\]\[□\]\[x\]╮$/u);
+  expect(w.header()).toMatch(/^╭─ Floating diff.*─+ − {2}□ {2}× ╮$/u);
   const initial = w.rect();
   const grip = { x: initial.col + 3, y: initial.row };
   w.pointer(0, grip);
@@ -65,9 +66,10 @@ test("native mouse controls keep a single overlay and restore the dragged and re
   const normal = { ...moved, width: moved.width - 4, height: moved.height - 2 };
   expect(w.rect()).toEqual(normal);
 
-  w.click("[□]");
+  w.click("□", -1);
   const maximized = { width: 80, height: 20, col: 0, row: 0 };
   expect(w.rect()).toEqual(maximized);
+  expect(w.header()).toMatch(/^╭─ Floating diff.*─+ − {2}❐ {2}× ╮$/u);
   expect(w.frame().at(-1)).not.toContain("◢");
   for (const start of [
     { x: 2, y: 0 },
@@ -78,19 +80,28 @@ test("native mouse controls keep a single overlay and restore the dragged and re
     w.pointer(0, { x: start.x - 1, y: start.y }, true);
     expect(w.rect()).toEqual(maximized);
   }
-  w.click("[_]");
+  w.click("−");
   expect(w.rect()).toEqual({ col: 8, row: 19, width: 64, height: 1 });
-  expect(w.header()).toMatch(/\[\+\]\[x\]╴$/u);
-  w.click("[+]");
+  expect(w.header()).toMatch(/ \+ {2}× ╴$/u);
+  w.click("+");
   expect(w.rect()).toEqual(maximized);
-  w.click("[❐]");
+  w.click("❐");
   expect(w.rect()).toEqual(normal);
   expect(w.overlay.mounts).toBe(1);
-  w.click("[x]");
+  w.click("×", 1);
   await expect(w.running).resolves.toBe(true);
   expect(w.overlay.completions).toBe(1);
   expect(w.renderer.host.getFocusedComponent()).toBe(w.renderer.editor);
   expect(w.renderer.editor.getValue()).toBe("main draft");
+});
+
+test("a narrow title shares the top border and leaves the first diff line visible", async (t) => {
+  const w = await openDemo(t, "fullscreen", { width: 32, rows: 9 });
+  expect(w.rect()).toMatchObject({ width: 28, height: 7 });
+  expect(w.header()).toBe("╭─ Floating diff ─ −  □  × ╮");
+  expect(w.frame()[1]).toContain("--- a/settings.toml");
+  w.click("×", 1);
+  await expect(w.running).resolves.toBe(true);
 });
 
 test("closing an unfocused diff from its title does not close or focus over another overlay", async (t) => {
@@ -101,7 +112,7 @@ test("closing an unfocused diff from its title does not close or focus over anot
   );
   try {
     expect(other.isFocused()).toBe(true);
-    w.click("[x]");
+    w.click("×");
     await expect(w.running).resolves.toBe(false);
     expect(other.isFocused()).toBe(true);
     expect(w.overlay.completions).toBe(1);
@@ -112,7 +123,7 @@ test("closing an unfocused diff from its title does not close or focus over anot
 
 test("native title controls ignore drag-back, right clicks, stale releases and a lost capture", async (t) => {
   const w = await openDemo(t, "fullscreen");
-  let x = w.at("[x]");
+  let x = w.at("×");
   w.pointer(0, x);
   w.pointer(32, { x: x.x - 10, y: x.y });
   w.pointer(32, x);
@@ -124,7 +135,7 @@ test("native title controls ignore drag-back, right clicks, stale releases and a
   w.renderer.resize(81, 20);
   w.pointer(0, x, true);
   expect(w.overlay.completions).toBe(0);
-  x = w.at("[x]");
+  x = w.at("×");
   w.pointer(0, x);
   w.renderer.send("\x1b[O");
   w.renderer.send("\x1b[I");
@@ -138,7 +149,7 @@ test("native title controls ignore drag-back, right clicks, stale releases and a
   w.pointer(0, { x: grip.x + 4, y: grip.y + 1 }, true);
   w.renderer.send("z");
   expect(w.rect()).toEqual(normal);
-  w.click("[x]");
+  w.click("×");
   await w.running;
 });
 
@@ -222,7 +233,7 @@ test.for([
 
 test("does not minimize in regular mode with no available restore key", async (t) => {
   const w = await openDemo(t, "regular", { bindings: { "tui.select.up": "m", "tui.select.down": "u" } });
-  expect(w.header()).not.toContain("[_]");
+  expect(w.header()).not.toContain("−");
   expect(w.header()).not.toContain("minimize");
   w.renderer.send("m");
   w.renderer.send("u");
@@ -279,8 +290,8 @@ test("cell width and hit testing agree with wide titles and constrained chrome",
     expect(frame.length).toBeLessThanOrEqual(height);
     expect(frame.every((line) => visibleWidth(line) <= width)).toBe(true);
     if (width === 32) expect(frame[0]).toContain("寬視窗🙂");
-    if (width === 5) expect(frame[0]).toBe("╭[x]╮");
-    if (width < 3) expect(frame.join("\n")).not.toContain("[x]");
+    if (width === 5) expect(frame[0]).toBe("╭ × ╮");
+    if (width < 3) expect(frame.join("\n")).not.toContain("×");
   }
   renderer.resize(8, 5);
   const bounds = handle.getBounds();
