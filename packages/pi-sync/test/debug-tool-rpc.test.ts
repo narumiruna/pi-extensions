@@ -9,7 +9,12 @@ import { adoptFixtureRoot } from "./daemon-test-helpers.js";
 const name = "pi_sync_debug";
 type Message = { role: string; content?: string };
 const messages = (request: Record<string, unknown>) => request.messages as Message[];
-const tools = (request: Record<string, unknown>) => request.tools as { function: { name: string } }[];
+const tools = (request: Record<string, unknown>) =>
+  request.tools as { function: { name: string; description: string } }[];
+const toolText = (request: Record<string, unknown> | undefined) =>
+  request && messages(request).findLast(({ role }) => role === "tool")?.content;
+const confirmations = (client: SyncRpc) =>
+  client.records.filter((entry) => entry.type === "extension_ui_request" && entry.method === "confirm");
 
 for (const debug of [false, true]) {
   describe(`debug tool in real Pi RPC (debug ${debug ? "on" : "off"})`, () => {
@@ -34,32 +39,20 @@ for (const debug of [false, true]) {
       });
     });
 
-    async function prompt(accept: boolean) {
-      const confirmations: { title: unknown; connectionRequests: number }[] = [];
-      const unsubscribe = client.onRecord((entry) => {
-        if (entry.type !== "extension_ui_request" || entry.method !== "confirm") return;
-        confirmations.push({ title: entry.title, connectionRequests: fixture.storage.requests.length });
-        client.child.stdin?.write(
-          `${JSON.stringify({ type: "extension_ui_response", id: entry.id, confirmed: accept })}\n`,
-        );
-      });
+    async function prompt() {
+      await client.prompt("Inspect sync health.");
+      assert.deepEqual(confirmations(client), []);
+      const text = toolText(fixture.requests.at(-1));
       try {
-        await client.prompt("Inspect sync health.");
-      } finally {
-        unsubscribe();
-      }
-      const sent = fixture.requests.at(-1);
-      const text = sent && messages(sent).findLast(({ role }) => role === "tool")?.content;
-      try {
-        return { confirmations, result: text ? JSON.parse(text) : undefined };
+        return text ? JSON.parse(text) : undefined;
       } catch {
-        return { confirmations, result: text };
+        return text;
       }
     }
 
     if (!debug) {
       test("the configured tools stay in order and the debug tool does not reach the model", async () => {
-        assert.deepEqual(await prompt(true), { confirmations: [], result: undefined });
+        assert.equal(await prompt(), undefined);
         assert.deepEqual(
           tools(fixture.requests[0]).map((tool) => tool.function.name),
           ["read", "edit"],
@@ -67,26 +60,8 @@ for (const debug of [false, true]) {
         assert.equal(fixture.storage.requests.length, 0);
       });
     } else {
-      test("decline performs no remote read or diagnostic check", async () => {
-        const { confirmations, result } = await prompt(false);
-        assert.deepEqual(
-          confirmations,
-          [{ title: "Recheck Pi Sync?", connectionRequests: 0 }],
-          JSON.stringify({
-            tools: fixture.requests.map(tools),
-            ui: client.records.filter(
-              (entry) => entry.type === "extension_ui_request" || entry.type === "tool_execution_end",
-            ),
-            result,
-          }),
-        );
-        assert.deepEqual(result, { kind: "declined" });
-        assert.equal(fixture.storage.requests.length, 0);
-      });
-
-      test("user confirmation authorizes only reads and latest returns the private log summary", async () => {
-        const { confirmations, result } = await prompt(true);
-        assert.deepEqual(confirmations, [{ title: "Recheck Pi Sync?", connectionRequests: 0 }]);
+      test("recheck reads without prompting and latest returns the private log summary", async () => {
+        const result = await prompt();
         const summary = {
           outcome: "checked",
           baseline: false,
@@ -118,9 +93,7 @@ for (const debug of [false, true]) {
           return entry;
         });
         action = "latest";
-        const history = await prompt(true);
-        assert.deepEqual(history.confirmations, []);
-        assert.deepEqual(history.result, {
+        assert.deepEqual(await prompt(), {
           kind: "historical",
           origin: "recheck",
           time: observed.time,
@@ -130,19 +103,21 @@ for (const debug of [false, true]) {
         assert.equal(fixture.storage.requests.length, methods.length);
         const initial = fixture.requests[0];
         assert.equal(tools(initial).at(-1)?.function.name, name);
+        let prefix = messages(initial);
         for (const request of fixture.requests) {
           assert.deepEqual(tools(request), tools(initial));
           assert.deepEqual(
             messages(request).filter(({ role }) => role === "system"),
             messages(initial).filter(({ role }) => role === "system"),
           );
+          assert.deepEqual(messages(request).slice(0, prefix.length), prefix);
+          prefix = messages(request);
         }
       });
 
       test("remote denial becomes a fixed failure category in both the tool result and the log", async () => {
         fixture.storage.options.deny = true;
-        const { confirmations, result } = await prompt(true);
-        assert.equal(confirmations.length, 1);
+        const result = await prompt();
         assert.match(String(result), /recheck failed: permission/u);
         assert.doesNotMatch(String(result), /127\.0\.0\.1|pi-sync\/home|HTTP 403/u);
         await vi.waitFor(async () => {
@@ -159,7 +134,7 @@ for (const debug of [false, true]) {
 
       test("reloading with Debug mode off removes the tool without reordering other tools", async () => {
         action = "latest";
-        assert.deepEqual((await prompt(true)).result, { kind: "no-record" });
+        assert.deepEqual(await prompt(), { kind: "no-record" });
         const names = tools(fixture.requests[0]).map((tool) => tool.function.name);
         assert.ok(names.includes(name));
         const from = fixture.requests.length;
@@ -177,6 +152,64 @@ for (const debug of [false, true]) {
     }
   });
 }
+
+test.for([
+  { mode: "on", debug: true, allowed: true },
+  { mode: "only", debug: true, allowed: true },
+  { mode: "only", debug: false, allowed: true },
+  { mode: "only", debug: true, allowed: false },
+] as const)("codemode $mode with debug=$debug and allowlisted=$allowed", async ({ mode, debug, allowed }, context) => {
+  const fixture = await createRpcFixture(context, [path.resolve("packages/pi-sync"), "builtin:codemode"], undefined, {
+    tools: ["read", "edit", "codemode", ...(allowed ? [name] : [])].join(","),
+    callTool: (request) =>
+      tools(request)?.some((tool) => tool.function.name === "codemode") && messages(request)?.at(-1)?.role === "user"
+        ? {
+            name: "codemode",
+            arguments: {
+              code: `return "${name}" in tools && ALL_TOOLS.some((tool) => tool.name === "${name}")
+  ? await tools.${name}({ action: "recheck" })
+  : "not callable";`,
+            },
+          }
+        : undefined,
+  });
+  const client = await fixture.prepare(async () => {
+    const pi = path.join(fixture.agent, "settings.json");
+    const sync = path.join(fixture.agent, "pi-sync.json");
+    await fs.writeFile(pi, JSON.stringify({ ...JSON.parse(await fs.readFile(pi, "utf8")), codemode: { mode } }));
+    await fs.writeFile(sync, JSON.stringify({ ...JSON.parse(await fs.readFile(sync, "utf8")), debug }));
+    const client = await fixture.connect();
+    await client.start();
+    return client;
+  });
+
+  await client.prompt("Recheck through codemode.");
+  assert.deepEqual(confirmations(client), []);
+  const [initial, followup] = fixture.requests;
+  assert.ok(initial && followup);
+  const expectedNames = mode === "on" ? ["read", "edit", "codemode", name] : ["codemode"];
+  assert.deepEqual(
+    tools(initial).map((tool) => tool.function.name),
+    expectedNames,
+  );
+  assert.deepEqual(tools(followup), tools(initial));
+  assert.deepEqual(messages(followup).slice(0, messages(initial).length), messages(initial));
+
+  const definition = tools(initial).find((tool) => tool.function.name === (mode === "only" ? "codemode" : name));
+  const result = toolText(followup) ?? "";
+  assert.match(result, /Script completed/u);
+  if (debug && allowed) {
+    assert.ok(definition?.function.description.includes(mode === "on" ? `tools.${name}` : `### \`${name}\``));
+    assert.match(result, /"kind":"fresh"/u);
+    assert.doesNotMatch(result, /127\.0\.0\.1|AGENTS\.md|Test-owned parent instructions/u);
+    const methods = fixture.storage.requests.map(({ method }) => method);
+    assert.ok(methods.length > 0 && methods.every((method) => method === "GET" || method === "PROPFIND"));
+  } else {
+    assert.ok(!definition?.function.description.includes(name));
+    assert.match(result, /not callable/u);
+    assert.equal(fixture.storage.requests.length, 0);
+  }
+});
 
 describe("existing startup checks with Debug mode", () => {
   let fixture: RpcFixture;

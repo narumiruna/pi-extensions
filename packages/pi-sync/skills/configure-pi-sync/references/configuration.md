@@ -248,7 +248,7 @@ Pi uses the saved value from session start, including `/reload`, new, resume, an
 
 #### Ask Pi to explain a check
 
-`pi_sync_debug` is available only in TUI and RPC sessions started or reloaded with Debug mode on, subject to Pi's tool allowlist. `latest` reads the most recent matching summary within the last 64 KiB of the private log. `recheck` reviews the named setup and asks before making a fresh read and returning a summary to the model. A declined or cancelled confirmation, or one that cannot be shown, makes no remote request. The tool does not publish, apply, test writes, or repair History.
+`pi_sync_debug` is available only in TUI and RPC sessions started or reloaded with Debug mode on, subject to Pi's tool allowlist. `latest` reads the most recent matching summary within the last 64 KiB of the private log. `recheck` reads the current setup's remote storage and returns a sanitized summary without prompting. The tool does not publish, apply, test writes, or repair History.
 
 A summary can include times, where the check came from, whether a previous sync was recorded, which side changed, whether file selections agree, file counts, and fixed failure categories. Stale, unavailable, and not-run results are not evidence of equality. Results omit secrets, setup names and fingerprints, addresses, paths, device names, snapshot IDs, content, and raw errors or log lines.
 

@@ -7,18 +7,15 @@ import { validateSettingsDocument } from "../src/settings/settings-validation.js
 import { registerPiSyncDebug } from "../src/sync/debug-tool.js";
 import { v3WebDavSettings } from "./data-fixtures.js";
 
-function fixture(mode: "tui" | "rpc" | "print") {
+function fixture(mode: "tui" | "print" | "json") {
   const pi = createMockPi({ activeTools: ["read", "edit"] });
-  const { ctx } = createMockContext({ hasUI: mode !== "print", mode });
+  const { ctx } = createMockContext({ hasUI: mode === "tui", mode });
   const context = ctx as ExtensionToolContext;
   let settings = validateSettingsDocument({ ...v3WebDavSettings(), debug: true });
   const controller = new AbortController();
   const run = vi.fn();
-  const client = {
-    validateDebugTool() {},
-    readStartupSettings: async () => ({ settings }),
-    run,
-  } as unknown as PiDaemonClient;
+  const readSettings = vi.fn(async () => ({ settings }));
+  const client = { validateDebugTool() {}, readStartupSettings: readSettings, run } as unknown as PiDaemonClient;
   let owner: { client: PiDaemonClient; signal: AbortSignal } | undefined = { client, signal: controller.signal };
   const expose = registerPiSyncDebug(pi.pi, () => owner);
   const tool = pi.tools.find(({ name }) => name === "pi_sync_debug");
@@ -32,17 +29,19 @@ function fixture(mode: "tui" | "rpc" | "print") {
   ) => Promise<unknown>;
   return {
     pi,
-    context,
     expose,
     run,
+    readSettings,
     controller,
-    setSettings(value: Record<string, unknown>) {
-      settings = validateSettingsDocument(value);
+    changeSetup() {
+      const changed = v3WebDavSettings();
+      changed.syncSetups.home.storage.path = "another/path";
+      settings = validateSettingsDocument({ ...changed, debug: true });
     },
     replaceOwner() {
       owner = undefined;
     },
-    recheck: () => execute("test", { action: "recheck" }, undefined, undefined, context),
+    recheck: (signal?: AbortSignal) => execute("test", { action: "recheck" }, signal, undefined, context),
   };
 }
 
@@ -57,31 +56,49 @@ test("tool activation changes only the owned name at the session boundary", () =
   assert.deepEqual(harness.pi.rawPi.getActiveTools(), ["edit", "read"]);
 });
 
-test.each(["setup", "owner", "cancelled"] as const)(
-  "a %s change during TUI review prevents remote reads",
+test.each(["owner", "cancelled"] as const)(
+  "%s during the settings read prevents remote inspection",
   async (changed) => {
     const harness = fixture("tui");
-    harness.context.ui.confirm = async (title, message) => {
-      assert.equal(title, "Recheck Pi Sync?");
-      assert.ok(message.includes("Setup: home"));
-      if (changed === "setup") {
-        const settings = v3WebDavSettings();
-        settings.syncSetups.home.storage.path = "another/path";
-        harness.setSettings({ ...settings, debug: true });
-      } else if (changed === "owner") harness.replaceOwner();
+    harness.readSettings.mockImplementationOnce(async () => {
+      if (changed === "owner") harness.replaceOwner();
       else harness.controller.abort();
-      return true;
-    };
-    await assert.rejects(harness.recheck(), /changed|replaced|aborted/iu);
+      return { settings: validateSettingsDocument(v3WebDavSettings()) };
+    });
+    await assert.rejects(harness.recheck(), changed === "owner" ? /session was replaced/u : { name: "AbortError" });
     assert.equal(harness.run.mock.calls.length, 0);
   },
 );
 
-test("a forced call in print mode does not read settings or open a confirmation", async () => {
-  const harness = fixture("print");
-  const confirm = vi.fn();
-  harness.context.ui.confirm = confirm;
+test.each(["setup", "owner", "tool cancelled", "session shut down"] as const)(
+  "%s during inspection prevents delivery of a stale result",
+  async (changed) => {
+    const harness = fixture("tui");
+    const toolAbort = new AbortController();
+    harness.run.mockImplementationOnce(async (operation: string, _payload: unknown, signal: AbortSignal) => {
+      assert.equal(operation, "inspect");
+      if (changed === "setup") harness.changeSetup();
+      else if (changed === "owner") harness.replaceOwner();
+      else {
+        if (changed === "tool cancelled") toolAbort.abort();
+        else harness.controller.abort();
+        assert.equal(signal.aborted, true);
+      }
+    });
+    const expected =
+      changed === "setup"
+        ? /setup changed during recheck/u
+        : changed === "owner"
+          ? /session was replaced/u
+          : { name: "AbortError" };
+    await assert.rejects(harness.recheck(toolAbort.signal), expected);
+    assert.equal(harness.run.mock.calls.length, 1);
+  },
+);
+
+test.each(["print", "json"] as const)("a forced call in %s mode does not read settings", async (mode) => {
+  const harness = fixture(mode);
   await assert.rejects(harness.recheck(), /requires an interactive session/u);
-  assert.equal(confirm.mock.calls.length, 0);
+  assert.equal(harness.readSettings.mock.calls.length, 0);
   assert.equal(harness.run.mock.calls.length, 0);
 });
