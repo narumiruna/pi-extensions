@@ -1,5 +1,11 @@
 # @narumitw/pi-agentfs
 
+## 0.2.9
+
+### Patch Changes
+
+- 536b35b: Update AgentFS to Turso 0.8.4 and Chat to HyperDHT 6.37.0.
+
 ## 0.2.8
 
 ### Patch Changes
