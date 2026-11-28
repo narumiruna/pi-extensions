@@ -301,24 +301,19 @@ test("complete module catalog covers every public module schema", () => {
   }
 });
 
-test("config path resolver returns Pi's tilde-aware absolute agent path", () => {
+test.each([
+  ["~/pi-starship-skill", "pi-starship-skill", homedir],
+  [".pi/agent", ".pi/agent", realpathSync],
+] as const)("config path resolver returns Pi's absolute settings path for %s", (agentDir, relativeDir, baseDir) => {
   const directory = mkdtempSync(path.join(tmpdir(), "pi-starship-path-resolver-"));
   try {
-    for (const [configuredAgentDir, expected] of [
-      [
-        `~/pi-starship-skill-${process.pid}`,
-        path.join(homedir(), `pi-starship-skill-${process.pid}`, "pi-starship.toml"),
-      ],
-      [".pi/agent", path.join(realpathSync(directory), ".pi", "agent", "pi-starship.toml")],
-    ] as const) {
-      const result = spawnSync(process.execPath, [configPathResolver], {
-        cwd: directory,
-        encoding: "utf8",
-        env: { ...process.env, PI_CODING_AGENT_DIR: configuredAgentDir },
-      });
-      assert.equal(result.status, 0, result.stderr);
-      assert.equal(JSON.parse(result.stdout), expected);
-    }
+    const result = spawnSync(process.execPath, [configPathResolver], {
+      cwd: directory,
+      encoding: "utf8",
+      env: { ...process.env, PATH: "", PI_CODING_AGENT_DIR: agentDir },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout), path.join(baseDir(directory), relativeDir, "pi-starship.toml"));
   } finally {
     rmSync(directory, { force: true, recursive: true });
   }
