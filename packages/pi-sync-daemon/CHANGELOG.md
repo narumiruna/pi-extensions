@@ -1,5 +1,11 @@
 # @narumitw/pi-sync-daemon
 
+## 0.15.1
+
+### Patch Changes
+
+- 36d1af7: Attempt to write Pi Sync inspection diagnostics before returning the result so the next settings read does not race the log write.
+
 ## 0.15.0
 
 ### Minor Changes

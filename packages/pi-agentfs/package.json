@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-agentfs",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "AgentFS virtual file workspace and restricted just-bash tools for Pi.",
   "type": "module",
   "license": "MIT",
