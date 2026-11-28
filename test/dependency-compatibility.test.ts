@@ -29,7 +29,12 @@ async function fixture(run: (root: string) => Promise<void>) {
   }
 }
 
-test("the root dependency command exits nonzero for a mismatch and succeeds after repair", async () => {
+test.each([
+  [1, "1.2.0", "1.0.4"],
+  [0, "1.2.0", "^1.2.0"],
+  [1, "npm:companion@1.2.0", "^2.0.0"],
+  [0, "npm:companion@1.2.0", "^1.0.0"],
+] as const)("the root dependency command exits with status %i for dev %s and peer %s", async (status, dev, peer) => {
   await fixture(async (root) => {
     const manifest = JSON.parse(await readFile(resolve("package.json"), "utf8"));
     await mkdir(join(root, "scripts"));
@@ -38,29 +43,20 @@ test("the root dependency command exits nonzero for a mismatch and succeeds afte
     }
     await json(root, "node_modules/companion/package.json", { name: "companion", version: "1.2.0" });
     await cp(resolve("node_modules/semver"), join(root, "node_modules/semver"), { recursive: true });
-    const check = () => spawnSync(...npmInvocation(["run", "check:dependencies"]), { cwd: root, encoding: "utf8" });
-    for (const [dev, peer, valid] of [
-      ["1.2.0", "1.0.4", false],
-      ["1.2.0", "^1.2.0", true],
-      ["npm:companion@1.2.0", "^2.0.0", false],
-      ["npm:companion@1.2.0", "^1.0.0", true],
-    ] as const) {
-      await json(root, "package.json", {
-        name: "fixture",
-        private: true,
-        version: "1.0.0",
-        scripts: { "check:dependencies": manifest.scripts["check:dependencies"] },
-        devDependencies: { companion: dev },
-        peerDependencies: { companion: peer },
-      });
-      const result = check();
-      if (valid) {
-        assert.equal(result.status, 0, result.stderr || result.stdout);
-        assert.match(result.stdout, /Dependency compatibility check passed/u);
-      } else {
-        assert.notEqual(result.status, 0);
-        assert.match(result.stderr, /package\.json:.*companion.*peer.*align/u);
-      }
+    await json(root, "package.json", {
+      name: "fixture",
+      private: true,
+      version: "1.0.0",
+      scripts: { "check:dependencies": manifest.scripts["check:dependencies"] },
+      devDependencies: { companion: dev },
+      peerDependencies: { companion: peer },
+    });
+    const result = spawnSync(...npmInvocation(["run", "check:dependencies"]), { cwd: root, encoding: "utf8" });
+    assert.equal(result.status, status, result.error?.message ?? (result.stderr || result.stdout));
+    if (status === 0) {
+      assert.match(result.stdout, /Dependency compatibility check passed/u);
+    } else {
+      assert.match(result.stderr, /package\.json:.*companion.*peer.*align/u);
     }
   });
 });
