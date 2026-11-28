@@ -1,5 +1,12 @@
 # @narumitw/pi-context-management
 
+## 0.1.7
+
+### Patch Changes
+
+- Updated dependencies [802416f]
+  - @narumitw/pi-tui-kit@0.74.0
+
 ## 0.1.6
 
 ### Patch Changes

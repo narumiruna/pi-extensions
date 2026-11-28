@@ -1,5 +1,12 @@
 # @narumitw/pi-agentfs
 
+## 0.2.11
+
+### Patch Changes
+
+- Updated dependencies [802416f]
+  - @narumitw/pi-tui-kit@0.74.0
+
 ## 0.2.10
 
 ### Patch Changes

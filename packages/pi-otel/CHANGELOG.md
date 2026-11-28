@@ -2,6 +2,13 @@
 
 Versions through 0.54.3 were released as `@narumitw/pi-langfuse`.
 
+## 0.55.5
+
+### Patch Changes
+
+- Updated dependencies [802416f]
+  - @narumitw/pi-tui-kit@0.74.0
+
 ## 0.55.4
 
 ### Patch Changes

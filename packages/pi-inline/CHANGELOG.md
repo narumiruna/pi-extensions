@@ -1,5 +1,12 @@
 # @narumitw/pi-inline
 
+## 0.7.3
+
+### Patch Changes
+
+- Updated dependencies [802416f]
+  - @narumitw/pi-tui-kit@0.74.0
+
 ## 0.7.2
 
 ### Patch Changes

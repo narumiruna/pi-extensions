@@ -1,5 +1,12 @@
 # @narumitw/pi-subagents
 
+## 4.1.3
+
+### Patch Changes
+
+- Updated dependencies [802416f]
+  - @narumitw/pi-tui-kit@0.74.0
+
 ## 4.1.2
 
 ### Patch Changes
