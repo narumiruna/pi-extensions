@@ -83,7 +83,7 @@ The daemon reads the top-level `debug` boolean in `pi-sync.json` for its agent d
 
 When enabled, the owner appends selected lifecycle, startup timing, check, and job records to the private `<agent-directory>/pi-sync.log`. Filter the JSON lines by `source` to isolate `pi-sync-daemon` records from `pi-sync` client records.
 
-The file is local-only. Records omit raw errors, credentials, addresses, paths, synced contents, and model data. Logging is best effort, not a recovery journal. Turning it off leaves existing records in place; retention is manual. See the [Pi Sync Debug mode reference](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/skills/configure-pi-sync/references/configuration.md#debug-mode) for cleanup and older snapshots.
+The file is local-only. Records omit raw errors, credentials, addresses, paths, synced contents, and model data. The daemon attempts to write inspection records before it returns the result. Logging is best effort, not a recovery journal; a skipped or failed write does not change the inspection result. Turning it off leaves existing records in place; retention is manual. See the [Pi Sync Debug mode reference](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/skills/configure-pi-sync/references/configuration.md#debug-mode) for cleanup and older snapshots.
 
 ## 🔒 Security and privacy
 

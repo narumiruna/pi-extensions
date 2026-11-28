@@ -75,23 +75,23 @@ for (const debug of [false, true]) {
         assert.deepEqual(result?.summary, summary);
         const methods = fixture.storage.requests.map(({ method }) => method);
         assert.ok(methods.length > 0 && methods.every((method) => method === "GET" || method === "PROPFIND"));
-        const log = path.join(fixture.agent, "pi-sync.log");
-        const observed = await vi.waitFor(async () => {
-          const contents = await fs.readFile(log, "utf8");
-          const entries = contents
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line));
-          const entry = entries.find((entry) => entry.event === "check" && entry.origin === "recheck");
-          assert.ok(entry?.operationId);
-          assert.ok(
-            entries.some(
-              (job) => job.event === "job" && job.operation === "inspect" && job.operationId === entry.operationId,
-            ),
-          );
-          assert.doesNotMatch(contents, /AGENTS\.md|127\.0\.0\.1|Test-owned parent instructions/u);
-          return entry;
-        });
+        const contents = await fs.readFile(path.join(fixture.agent, "pi-sync.log"), "utf8");
+        const entries = contents
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        const observed = entries.find((entry) => entry.event === "check" && entry.origin === "recheck");
+        assert.ok(observed?.operationId, "Expected a correlated recheck in the daemon's debug log");
+        assert.ok(
+          entries.some(
+            (job) =>
+              job.event === "job" &&
+              job.operation === "inspect" &&
+              job.outcome === "completed" &&
+              job.operationId === observed.operationId,
+          ),
+        );
+        assert.doesNotMatch(contents, /AGENTS\.md|127\.0\.0\.1|Test-owned parent instructions/u);
         action = "latest";
         assert.deepEqual(await prompt(), {
           kind: "historical",
@@ -120,16 +120,14 @@ for (const debug of [false, true]) {
         const result = await prompt();
         assert.match(String(result), /recheck failed: permission/u);
         assert.doesNotMatch(String(result), /127\.0\.0\.1|pi-sync\/home|HTTP 403/u);
-        await vi.waitFor(async () => {
-          const log = await fs.readFile(path.join(fixture.agent, "pi-sync.log"), "utf8");
-          const records = log
-            .trimEnd()
-            .split("\n")
-            .map((line) => JSON.parse(line));
-          const check = records.find((event) => event.event === "check" && event.origin === "recheck");
-          assert.deepEqual(check?.summary, { outcome: "failed", reason: "permission" });
-          assert.doesNotMatch(log, /127\.0\.0\.1|pi-sync\/home|HTTP 403/u);
-        });
+        const log = await fs.readFile(path.join(fixture.agent, "pi-sync.log"), "utf8");
+        const records = log
+          .trimEnd()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        const check = records.find((event) => event.event === "check" && event.origin === "recheck");
+        assert.deepEqual(check?.summary, { outcome: "failed", reason: "permission" });
+        assert.doesNotMatch(log, /127\.0\.0\.1|pi-sync\/home|HTTP 403/u);
       });
 
       test("reloading with Debug mode off removes the tool without reordering other tools", async () => {
@@ -229,28 +227,25 @@ describe("existing startup checks with Debug mode", () => {
   });
 
   test("records the existing remote check without an agent call or publication", async () => {
-    const checks = await vi.waitFor(
-      async () => {
-        const report = client.records.find(
+    const report = await vi.waitUntil(
+      () =>
+        client.records.find(
           ({ type, method, message }) =>
             type === "extension_ui_request" &&
             method === "notify" &&
             typeof message === "string" &&
             message.startsWith("pi-sync debug: background startup"),
-        );
-        assert.ok(report, "Pi RPC did not report background startup completion");
-        assert.match(String(report.message), /^pi-sync debug: background startup \(completed\)\n/u);
-        const log = await fs.readFile(path.join(fixture.agent, "pi-sync.log"), "utf8");
-        const recorded = log
-          .trimEnd()
-          .split("\n")
-          .map((line) => JSON.parse(line))
-          .filter((event) => event.event === "check");
-        assert.equal(recorded.length, 1, "Expected one startup check in the daemon's debug log");
-        return recorded;
-      },
-      { timeout: 4_000 },
+        ),
+      { timeout: 4_000, message: "Pi RPC did not report background startup completion" },
     );
+    assert.match(String(report.message), /^pi-sync debug: background startup \(completed\)\n/u);
+    const log = await fs.readFile(path.join(fixture.agent, "pi-sync.log"), "utf8");
+    const checks = log
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+      .filter((event) => event.event === "check");
+    assert.equal(checks.length, 1, "Expected one startup check in the daemon's debug log");
     assert.equal(checks[0].origin, "startup");
     assert.equal(checks[0].summary.outcome, "checked");
     assert.deepEqual(

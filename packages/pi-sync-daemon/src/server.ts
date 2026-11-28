@@ -154,7 +154,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   const debug: DaemonDiagnosticSink | undefined = diagnostic
     ? (event, current) => {
         try {
-          diagnostic(event, () => ownsLog() && (current?.() ?? true));
+          return diagnostic(event, () => ownsLog() && (current?.() ?? true))?.catch(() => {});
         } catch {}
       }
     : undefined;
@@ -478,8 +478,12 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       job.controller.abort(new DOMException("Operation cancelled before dispatch", "AbortError"));
     const execution = makeExecution(job);
     const kind = debug && debugOperation(operation);
-    const note = (outcome: "started" | "completed" | "failed" | "cancelled" | "blocked" | "skipped") => {
-      if (kind) debug?.({ event: "job", operation: kind, outcome, operationId: id });
+    const waitForInspectionLog = kind === "inspect";
+    const note = (
+      outcome: "started" | "completed" | "failed" | "cancelled" | "blocked" | "skipped",
+      current?: () => boolean,
+    ) => {
+      if (kind) return debug?.({ event: "job", operation: kind, outcome, operationId: id }, current);
     };
     job.promise = queue
       .then(async () => {
@@ -497,15 +501,20 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
             });
           foregroundRecoveryJob ??= job;
         }
+        const logged = note(
+          debugJobResult(operation, result) ?? job.debugOutcome ?? "completed",
+          waitForInspectionLog ? () => !execution.signal.aborted : undefined,
+        );
+        if (waitForInspectionLog && logged) {
+          await logged;
+          execution.validate();
+        }
         job.view.result = result;
         job.view.phase = "done";
-        note(debugJobResult(operation, result) ?? job.debugOutcome ?? "completed");
       })
-      .catch((error) => {
+      .catch(async (error) => {
         if (error instanceof ConsentPublicationError) consentPublicationFailed = true;
-        job.view.phase = "failed";
-        job.view.error = remoteError(error);
-        note(
+        const logged = note(
           !job.committed && (job.controller.signal.aborted || (error instanceof Error && error.name === "AbortError"))
             ? "cancelled"
             : (job.debugOutcome ??
@@ -513,6 +522,9 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
                   ? "blocked"
                   : "failed")),
         );
+        if (waitForInspectionLog && logged) await logged;
+        job.view.phase = "failed";
+        job.view.error = remoteError(error);
         if (job.committed)
           for (const id of new Set([client, ...job.peers])) {
             const affected = participants.get(id);
