@@ -10,6 +10,8 @@ export class SnapshotCaptureLimitError extends Error {
 
 export interface SnapshotCaptureLimits {
   maxDepth: number;
+  examineEntry(): void;
+  admitFile(size: number): void;
   readEntries(directory: string, signal?: AbortSignal): Promise<Dirent[]>;
   readFile(file: string, signal?: AbortSignal): Promise<Buffer>;
 }
@@ -46,8 +48,19 @@ export function createSnapshotCaptureLimits(limits: {
   depth: number;
 }): SnapshotCaptureLimits {
   let { bytes, entries, files } = limits;
+  function examineEntry() {
+    if (entries < 1) throw new SnapshotCaptureLimitError();
+    entries--;
+  }
+  function admitFile(size: number) {
+    if (files < 1 || size > bytes) throw new SnapshotCaptureLimitError();
+    files--;
+    bytes -= size;
+  }
   return {
     maxDepth: limits.depth,
+    examineEntry,
+    admitFile,
     async readEntries(directory, signal) {
       const absolute = path.resolve(directory);
       const stat = await identifySource(absolute, signal);
@@ -60,7 +73,7 @@ export function createSnapshotCaptureLimits(limits: {
           signal?.throwIfAborted();
           const entry = await handle.read();
           if (!entry) break;
-          if (--entries < 0) throw new SnapshotCaptureLimitError();
+          examineEntry();
           result.push(entry);
         }
         requireSameSource(stat, await identifySource(absolute, signal));
@@ -71,16 +84,14 @@ export function createSnapshotCaptureLimits(limits: {
     },
     async readFile(file, signal) {
       signal?.throwIfAborted();
-      if (--files < 0) throw new SnapshotCaptureLimitError();
       const absolute = path.resolve(file);
       const stat = await identifySource(absolute, signal);
       if (!stat.isFile() || stat.nlink !== 1) unsafeSource();
-      if (stat.size > bytes) throw new SnapshotCaptureLimitError();
+      admitFile(stat.size);
       const handle = await fs.open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       try {
         requireSameSource(stat, await handle.stat());
         requireSameSource(stat, await identifySource(absolute, signal));
-        bytes -= stat.size;
         const content = Buffer.alloc(stat.size);
         for (let offset = 0; offset < content.length; ) {
           signal?.throwIfAborted();

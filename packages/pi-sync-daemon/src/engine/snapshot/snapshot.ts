@@ -400,7 +400,7 @@ async function collectAgentDirectory<T extends { path: string }>(
   materialize?: MaterializeFile<T>,
   pendingStateEntry?: string,
 ) {
-  const signal = options.signal;
+  const { signal, limits } = options;
   const excluded = compileSyncPolicyExclude(options);
   const canTraverse = compileSyncPolicyTraversal(options);
   const sessionDir = options.sessionDir ?? (await agentDirectoryConfiguredSessionDir(signal, root));
@@ -413,13 +413,13 @@ async function collectAgentDirectory<T extends { path: string }>(
   let bytes = 0;
 
   async function walk(directory: ScannedPath, prefix: string, sessions: boolean) {
-    if (options.limits && prefix && prefix.split("/").length >= options.limits.maxDepth)
-      throw new SnapshotCaptureLimitError();
+    if (limits && prefix && prefix.split("/").length >= limits.maxDepth) throw new SnapshotCaptureLimitError();
     if (!directory.stat.isDirectory()) changedScan();
     directories.push(directory);
     const children: Dirent[] = [];
     for await (const entry of await fs.opendir(directory.absolute)) {
       signal?.throwIfAborted();
+      limits?.examineEntry();
       const absolute = path.join(directory.absolute, entry.name);
       entries.set(absolute, "unreviewed");
       const allowance = pendingStateEntry !== undefined && entries.has(pendingStateEntry) ? 1 : 0;
@@ -449,6 +449,7 @@ async function collectAgentDirectory<T extends { path: string }>(
         if (bytes > MAX_AGENT_DIRECTORY_BYTES) throw new Error("Agent directory exceeds the 64 MiB scan byte bound.");
         if (candidates.length >= MAX_AGENT_DIRECTORY_FILES)
           throw new Error("Agent directory exceeds the scan file bound.");
+        limits?.admitFile(candidate.stat.size);
         entries.set(candidate.absolute, "file");
         candidates.push({ ...candidate, snapshotPath });
       }

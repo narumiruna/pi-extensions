@@ -94,8 +94,16 @@ captured row and revalidates the attached owner, generation, and current setup; 
 path from the request or recapture the pair. No patch is copied into job results, events, or debug
 records. Acknowledged close is idempotent. Cancellation of the capture, owner loss, replacement,
 shutdown, and expiry release the in-memory data; clients should close the review when leaving it.
+A session binding change invalidates reviews even when the client generation stays the same. A
+failed facts update must not leave a provisional review readable under the restored binding. If the
+client loses the binding update acknowledgement, it waits for a confirmed binding before another
+preview request. After a failed pause, only a still-active connection can start fresh preview requests. If the client
+cannot confirm the capture outcome, it directs the user to reload and reconcile instead of retrying
+on the same connection.
 
-The capture has a 30-second time limit. Local review scans bound selected bytes to 64 MiB and paths
+The capture has a 30-second time limit. Both local scan scopes enforce entry, file, byte, and path
+depth budgets. An agent-directory scan uses a separate fixed settings limit to determine the session
+root; it counts selected settings content once. A review limits selected bytes to 64 MiB and paths
 to 64 segments. Before remote policy filtering, WebDAV and S3 limit both the downloaded gzip
 artifact and its decompressed JSON to 64 MiB each. A review requires the artifact without extra HTTP
 content encoding so it can bound the response bytes. Git checks the validated manifest's total file

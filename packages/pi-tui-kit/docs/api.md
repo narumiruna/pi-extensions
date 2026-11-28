@@ -353,6 +353,8 @@ Set `presentation: "floating"` to open the same review in a centered `FloatingFr
 
 The opt-in review accepts viewport keys while focused, including in the inline fallback. Native fullscreen transcript-search activation runs before both presentations. If it conflicts with Ctrl+C, Kit refuses to mount and returns `error`. Change the native search binding or exit fullscreen to open the review.
 
+**Admission exception:** Pi Sync is the only production consumer of `presentation: "floating"`. This is a narrow exception to Kit's default two-consumer rule. The option changes where `runDocumentReview()` displays the document; it keeps the same renderer, typed results, and cancellation and cleanup contract. A Sync-owned wrapper would duplicate those controls or need access to private Kit components. The exception does not admit a separate `DiffViewer` or a general overlay lifecycle API.
+
 The configured cancel key (Escape by default) and Ctrl+C return typed `cancelled` results with Back and Close reasons, respectively. In active search, the configured search-close key closes only search; Ctrl+C still closes the review. `hint: "close"` also maps the ordinary cancel action to Close. Keyboard input belongs to the focused overlay; closing or aborting the review does not dismiss any other overlay.
 When `confirmation` is omitted, no action can confirm the document; optional Copy stays in the same view.
 RPC uses the authoritative sanitized document pages, optional confirmation, and signal-aware `select()` dialogs; TUI-only search and `presentation` are ignored.

@@ -7,6 +7,7 @@ import lockfile from "proper-lockfile";
 import { DAEMON_BUILD_ID, DAEMON_BUILD_VERSION } from "./build-version.js";
 import { ConsentPublicationError, readConsent } from "./consent.js";
 import type { DaemonDiagnosticSink } from "./daemon-debug.js";
+import { sameDiffReviewBinding } from "./diff-review-binding.js";
 import { handleDiffReviewRequest } from "./diff-review-rpc.js";
 import { createDiffReviewStore } from "./diff-review-store.js";
 import { endpointOwner } from "./endpoint.js";
@@ -646,15 +647,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
   async function resumeContact(facts: ClientFacts, disconnect?: AbortSignal) {
     const peer = requireParticipant(facts.id, true);
     const expiry = peer.expiry;
-    const matchesSession = (old: ClientFacts) =>
-      old.pid === facts.pid &&
-      old.generation === facts.generation &&
-      old.cwd === facts.cwd &&
-      old.sessionId === facts.sessionId &&
-      old.sessionFile === facts.sessionFile &&
-      old.sessionDir === facts.sessionDir &&
-      old.mode === facts.mode &&
-      old.hasUI === facts.hasUI;
+    const matchesSession = (old: ClientFacts) => sameDiffReviewBinding(old, facts);
     if (!expiry || contactState(peer) !== "expired" || peer.resumeFacts || !matchesSession(peer.facts))
       throw new Error("Client is not eligible to resume contact for this session.");
     const signal = disconnect ? AbortSignal.any([disconnect, expiry.signal]) : expiry.signal;
@@ -931,7 +924,7 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
           invalidateDiffReview(old);
         }
         participantsChanged();
-        participants.set(params.id, {
+        const replacement: Participant = {
           facts: structuredClone(params),
           reviewDetails,
           reservations: old?.reservations,
@@ -943,13 +936,17 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
           suspected: false,
           seen: Date.now(),
           publishing: !old,
-        });
+        };
+        participants.set(params.id, replacement);
         try {
           await savePeers();
           assertOwner();
         } catch (error) {
-          if (old) participants.set(params.id, old);
-          else participants.delete(params.id);
+          if (participants.get(params.id) === replacement) {
+            invalidateDiffReview(replacement);
+            if (old) participants.set(params.id, old);
+            else participants.delete(params.id);
+          }
           throw error;
         }
         const attached = requireParticipant(params.id, true);
@@ -1024,24 +1021,19 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
         throw new Error("Client generation mismatch.");
       if (contactState(peer) === "expired") throw new ClientContactExpiredError();
       requireParticipant(params.facts.id);
-      const next = params.facts;
-      if (
-        old.mode !== next.mode ||
-        old.hasUI !== next.hasUI ||
-        old.cwd !== next.cwd ||
-        old.sessionId !== next.sessionId ||
-        old.sessionDir !== next.sessionDir ||
-        old.sessionFile !== next.sessionFile
-      )
-        invalidateDiffReview(peer);
-      peer.facts = structuredClone(next);
-      const published = peer.facts;
+      const published = structuredClone(params.facts);
+      const bindingChanged = !sameDiffReviewBinding(old, published);
+      if (bindingChanged) invalidateDiffReview(peer);
+      peer.facts = published;
       const unchanged = JSON.stringify(old) === JSON.stringify(published);
       if (!unchanged) participantsChanged();
       try {
         await savePeers(undefined, unchanged);
       } catch (error) {
-        if (peer.facts === published) peer.facts = old;
+        if (participants.get(published.id) === peer && peer.facts === published) {
+          peer.facts = old;
+          if (bindingChanged) invalidateDiffReview(peer);
+        }
         throw error;
       }
       await hooks.factsChanged?.();
