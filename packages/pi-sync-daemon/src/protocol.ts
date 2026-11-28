@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { DaemonDiagnosticSink } from "./daemon-debug.js";
+import type { PreparedDiffReview } from "./diff-review-store.js";
 
 export const PROTOCOL_VERSION = 1;
 export const OWNERSHIP_CLEANUP_REQUIRED = "DAEMON_OWNERSHIP_CLEANUP";
@@ -131,6 +132,7 @@ export interface Execution {
   /** Fence attach publication until every queue grant and release in the action settles. */
   withParticipants<T>(action: (peers: readonly ClientFacts[]) => Promise<T>): Promise<T>;
   validate(): void;
+  diffReview?: { clear(): void; retain(prepared: PreparedDiffReview): boolean };
   request(kind: string, payload: unknown, clientId?: string, signal?: AbortSignal): Promise<unknown>;
   emit(kind: ClientEvent["kind"], payload: unknown, clientId?: string): void;
   debug?: DaemonDiagnosticSink;

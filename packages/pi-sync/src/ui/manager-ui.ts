@@ -228,12 +228,13 @@ export async function showSyncManager(
         });
         return { kind: result.kind === "closed" ? "close" : "stay" };
       },
-      diff: async ({ state }) => {
-        const result = await runCancellableOperation(ctx, "Comparing local and remote…", "diff", runRoute, {
-          target: state.manager.configReview?.setupName,
-          signal: sessionSignal,
-        });
-        return { kind: result.kind === "closed" ? "close" : "stay" };
+      diff: async ({ state, signal }) => {
+        const review = state.manager.configReview;
+        if (!review) return { kind: "stay" };
+        const intent =
+          ctx.mode === "tui" ? { intent: "read-diff" as const, fingerprint: review.fingerprint } : undefined;
+        const result = await runRoute("diff", signal, undefined, review.setupName, undefined, undefined, intent);
+        return { kind: signal.aborted || !isCurrent() || result?.kind === "closed" ? "close" : "stay" };
       },
       "daemon-recovery": async ({ signal }) => {
         await runRoute("daemon recover", signal);

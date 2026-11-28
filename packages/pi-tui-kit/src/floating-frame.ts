@@ -106,7 +106,8 @@ export class FloatingFrame implements Component, Focusable {
 
   render(width: number): string[] {
     const { height } = this.bounds;
-    if (width <= 0 || height <= 0) return [];
+    width = nonnegativeInteger(width);
+    if (width === 0 || height === 0) return [];
     const viewport = innerViewport(width, height);
     const inset = hasFrame(width, height);
     const body = this.options.body.render(viewport);

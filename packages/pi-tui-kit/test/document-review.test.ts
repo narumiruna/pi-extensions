@@ -114,6 +114,7 @@ test("runDocumentReview adapts paginated review and confirmation to RPC", async 
   const result = await runDocumentReview(ctx, {
     title: "Review",
     content,
+    presentation: "floating",
     viewportSize: 4,
     confirmation: { label: "Apply" },
     enableSearch: true,

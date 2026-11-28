@@ -12,7 +12,7 @@ import { updateLocalConfig } from "../src/settings/settings-store.js";
 import type { PiSyncSettingsV3 } from "../src/settings/settings-types.js";
 import { writeStateForConfig } from "../src/state/sync-state-store.js";
 import { createSyncLoaders } from "../src/sync/sync-loaders.js";
-import type { DirectionalIntent } from "../src/ui/cancellable-operation.js";
+import type { RunRouteIntent } from "../src/ui/cancellable-operation.js";
 import { showSyncManager } from "../src/ui/manager-ui.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 import { MemorySyncBackend } from "./memory-sync-backend.js";
@@ -103,7 +103,7 @@ for (const [label, route] of setupActions) {
       const choices: Array<string | undefined> = [label, undefined];
       const context = createMockContext({ mode: "rpc", select: async () => choices.shift() });
       const fingerprint = syncCheckConfigFingerprint(await loadConfig("home"));
-      const calls: Array<{ route: string; setup?: string; retry?: boolean; directional?: DirectionalIntent }> = [];
+      const calls: Array<{ route: string; setup?: string; retry?: boolean; directional?: RunRouteIntent }> = [];
       await showSyncManager(context.ctx, async (actualRoute, _signal, _commit, setup, _dialog, retry, directional) => {
         calls.push({ route: actualRoute, setup, retry, directional });
         return { kind: "completed", outcome: "cancelled" };
@@ -140,7 +140,7 @@ for (const direction of ["push", "pull"] as const) {
             return review;
           },
         });
-        const intents: Array<DirectionalIntent | undefined> = [];
+        const intents: Array<RunRouteIntent | undefined> = [];
         await showSyncManager(
           context.ctx,
           async (_route, _signal, _commit, _setup, _dialog, _retry, intent) => {

@@ -1765,7 +1765,7 @@ test("component disposal aborts and drains pending setting work before returning
       harness.handleInput("tui.select.confirm");
       await actionStarted;
       harness.dispose();
-      return undefined;
+      return new Promise(() => {});
     },
   });
   const running = runMenu(context.ctx, runtimeMenu(), { getState: () => undefined });

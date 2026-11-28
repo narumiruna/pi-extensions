@@ -24,12 +24,20 @@ export function sessionDirFromContext(ctx: ExtensionCommandContext | ExtensionCo
   return typeof getSessionDir === "function" ? (getSessionDir.call(manager) as string | undefined) : undefined;
 }
 
-export async function configuredSessionDir() {
+export async function configuredSessionDir(readFile?: (file: string) => Promise<Buffer>) {
   let content: string;
+  let discovered = false;
   try {
-    content = await fs.readFile(path.join(agentDir(), "settings.json"), "utf8");
+    const file = path.join(agentDir(), "settings.json");
+    if (readFile) {
+      await fs.lstat(file);
+      discovered = true;
+      content = (await readFile(file)).toString("utf8");
+    } else {
+      content = await fs.readFile(file, "utf8");
+    }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if (!discovered && (error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
   let settings: { sessionDir?: string } | null;

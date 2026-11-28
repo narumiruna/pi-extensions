@@ -43,15 +43,20 @@ export function componentKeybindings<Bindings extends object>(
   tui: RenderHost,
   keybindings: Bindings,
   capturesViewportInput = false,
+  hardCancel?: string,
 ): Bindings {
+  const hardCancelId = hardCancel && canonicalKeyId(hardCancel);
   return new Proxy(keybindings, {
     get(target, property) {
       const value = Reflect.get(target, property, target);
       if (property === "getKeys" && typeof value === "function") {
         return (binding: string) =>
-          (value as (binding: string) => readonly string[])
-            .call(target, binding)
-            .filter((key) => componentKeyAvailable(tui, key, capturesViewportInput));
+          (value as (binding: string) => readonly string[]).call(target, binding).filter((key) => {
+            if (!componentKeyAvailable(tui, key, capturesViewportInput)) return false;
+            if (!hardCancelId) return true;
+            const canonical = canonicalKeyId(key);
+            return !canonical || !keysOverlap(hardCancelId, canonical, usesDisambiguatedKeyProtocol(tui));
+          });
       }
       return typeof value === "function" ? value.bind(target) : value;
     },

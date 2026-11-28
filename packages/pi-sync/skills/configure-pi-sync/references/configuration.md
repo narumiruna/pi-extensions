@@ -79,7 +79,7 @@ Escape closes the screen without undoing successful saves.
 Complex values retain their input/review flows.
 This navigation change does not alter schema, defaults, automatic-sync behavior, or explicit opt-ins.
 
-The main menu shows cached status separately from transfer, inspection, and management actions. **View differences** (`/sync diff`) reads current file differences only when selected. It works with Debug mode off and is not a comparison against the last sync.
+The main menu shows cached status separately from transfer, inspection, and management actions. **View differences** (`/sync diff`) reads current file differences only when selected. In TUI, select an entry to inspect one text diff; RPC shows the file summary. It works with Debug mode off and is not a comparison against the last sync.
 **Last applied snapshot** shows an ID, not an application time. The menu shortens long IDs; **History** shows the full IDs.
 See the [TUI behavior contract](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/tui-contract.md) for scopes and transfer branches.
 

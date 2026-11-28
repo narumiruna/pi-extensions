@@ -334,6 +334,7 @@ const result = await runDocumentReview(ctx, {
   title: "Review generated configuration",
   content: generatedDocument,
   format: { kind: "diff", filePath: "settings.json" },
+  presentation: "floating", // Optional. Omit for the default inline view.
   viewportSize: "adaptive",
   enableSearch: true,
   confirmation: { label: "Apply" },
@@ -348,12 +349,18 @@ The API uses the same text, code, diff, and Markdown formatter as declarative `r
 Before opening a TUI Markdown review with an enabled top-level Mermaid fence, it awaits Kit's lazy renderer preparation and revalidates the owner signal and generation.
 Mermaid preparation remains internal; callers receive no renderer or component factory.
 
-TUI Escape and Ctrl+C return typed `cancelled` results with Back and Close reasons.
+Set `presentation: "floating"` to open the same review in a centered `FloatingFrame` in TUI mode. The window takes keyboard focus without replacing the editor. In fullscreen, drag the title to move the window or drag its edges to resize it. In regular mode, review with the keyboard; Pi does not route mouse events there. The open window adapts to terminal resize without remounting or clearing a search query. A terminal smaller than 24 columns or 5 rows at opening uses the inline view instead.
+
+The opt-in review accepts viewport keys while focused, including in the inline fallback. Native fullscreen transcript-search activation runs before both presentations. If it conflicts with Ctrl+C, Kit refuses to mount and returns `error`. Change the native search binding or exit fullscreen to open the review.
+
+**Admission exception:** Pi Sync is the only production consumer of `presentation: "floating"`. This is a narrow exception to Kit's default two-consumer rule. The option changes where `runDocumentReview()` displays the document; it keeps the same renderer, typed results, and cancellation and cleanup contract. A Sync-owned wrapper would duplicate those controls or need access to private Kit components. The exception does not admit a separate `DiffViewer` or a general overlay lifecycle API.
+
+The configured cancel key (Escape by default) and Ctrl+C return typed `cancelled` results with Back and Close reasons, respectively. In active search, the configured search-close key closes only search; Ctrl+C still closes the review. `hint: "close"` also maps the ordinary cancel action to Close. Keyboard input belongs to the focused overlay; closing or aborting the review does not dismiss any other overlay.
 When `confirmation` is omitted, no action can confirm the document; optional Copy stays in the same view.
-RPC uses the authoritative sanitized document pages, optional confirmation, and signal-aware `select()` dialogs; TUI-only search is ignored.
+RPC uses the authoritative sanitized document pages, optional confirmation, and signal-aware `select()` dialogs; TUI-only search and `presentation` are ignored.
 Print and JSON return `unsupported`.
 Owner abort, stale ownership, external disposal, invalid options, and failures remain distinct `stale` or `error` results.
-The caller owns every confirmed side effect and must revalidate domain state before applying it.
+The caller must abort the owner signal on session replacement or shutdown and revalidate domain state before applying any confirmed side effect.
 
 ### Full-source document copy
 

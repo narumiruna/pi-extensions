@@ -6,7 +6,12 @@ import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test, vi } from "vitest";
 import { createMockContext } from "../../../test/support.js";
 import { localConfigPath } from "../src/settings/config-file.js";
-import type { RunRoute, RunRouteResult } from "../src/ui/cancellable-operation.js";
+import {
+  type RunRoute,
+  type RunRouteIntent,
+  type RunRouteResult,
+  runCancellableTask,
+} from "../src/ui/cancellable-operation.js";
 import { showSyncManager } from "../src/ui/manager-ui.js";
 import { v3S3Settings, withTempHome } from "./helpers.js";
 
@@ -40,6 +45,7 @@ type RouteCall = {
   onCommit?: () => void;
   target?: string;
   retry?: boolean;
+  intent?: RunRouteIntent;
 };
 
 async function configured(run: () => Promise<void>, alternateSetup = false) {
@@ -97,11 +103,20 @@ async function withPalette(
         return true;
       },
     });
-    const route: RunRoute = async (route, signal, onCommit, target, _onDialog, retry) => {
-      const call = { route, signal, onCommit, target, retry };
-      routes.push(call);
-      started.resolve(call);
-      return release.promise;
+    const route: RunRoute = async (route, signal, onCommit, target, _onDialog, retry, intent) => {
+      const run = (signal?: AbortSignal) => {
+        const call = { route, signal, onCommit, target, retry, intent };
+        routes.push(call);
+        started.resolve(call);
+        return release.promise;
+      };
+      if (route !== "diff") return run(signal);
+      const result = await runCancellableTask(context.ctx, "Comparing local and remote…", run, {
+        signal,
+        closeOnHardCancel: true,
+      });
+      if (result.kind === "closed") return { kind: "closed" };
+      return result.kind === "completed" ? result.value : { kind: "completed" };
     };
     const running = showSyncManager(context.ctx, route, owner.signal);
     try {
@@ -223,6 +238,10 @@ for (const action of ordinaryActions) {
       assert.ok(call.signal instanceof AbortSignal);
       assert.equal(call.signal.aborted, false);
       assert.equal(call.retry, undefined);
+      if (action.route === "diff") {
+        assert.equal(call.intent?.intent, "read-diff");
+        assert.match(call.intent?.fingerprint ?? "", /^[a-f\d]{64}$/u);
+      }
       assert.equal(
         typeof call.onCommit,
         ["sync", "pull", "push", "history"].includes(action.route) ? "function" : "undefined",

@@ -11,6 +11,7 @@ export interface CommandOptions {
   auto: boolean;
   setup?: string;
   automaticFingerprint?: string;
+  diffReviewFingerprint?: string;
   signal?: AbortSignal;
   onCommit?: () => void;
   /** In-memory startup diagnostics only; never persisted or sent to a backend. */

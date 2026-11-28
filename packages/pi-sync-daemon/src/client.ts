@@ -2,6 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { DaemonError, requestDaemon } from "./client-transport.js";
 import { stopDaemonAfterForegroundQueueFailure } from "./daemon-recovery.js";
+import { sameDiffReviewBinding } from "./diff-review-binding.js";
+import {
+  DIFF_REVIEW_REQUEST_MS,
+  type DiffReviewPreview,
+  isDiffReviewId,
+  parseDiffReviewInventory,
+  readDiffReviewPreview,
+} from "./diff-review-protocol.js";
 import { isForegroundDirection, isForegroundQueueOutcome } from "./foreground-queue-outcome.js";
 import { canonicalRootGuard, type RuntimePaths, readProcessBirth } from "./identity.js";
 import { withCleanup } from "./lifecycle.js";
@@ -15,6 +23,7 @@ import {
   type Identity,
   type JobView,
   MAX_REVIEW_BYTES,
+  OWNERSHIP_CLEANUP_REQUIRED,
   operationPrefix,
   REVIEW_PAGE_CHARS,
   record,
@@ -73,6 +82,9 @@ export class DaemonConnection {
   private controller = new AbortController();
   private callbacks = new Map<string, PendingCallback>();
   private callbackIO = new AbortController();
+  private diffReviewIO?: AbortController;
+  private diffReviewPaused = false;
+  private diffReviewBinding?: ClientFacts;
   private callbackTasks = new Set<Promise<void>>();
   private updates = Promise.resolve();
   private attached = false;
@@ -112,6 +124,14 @@ export class DaemonConnection {
     readonly facts: ClientFacts,
     private readonly options: ConnectionOptions,
   ) {}
+  private setFacts(facts: ClientFacts) {
+    const changed = !sameDiffReviewBinding(this.facts, facts);
+    for (const key of Object.keys(this.facts) as (keyof ClientFacts)[])
+      if (!Object.hasOwn(facts, key)) delete this.facts[key];
+    Object.assign(this.facts, facts);
+    this.diffReviewBinding = { ...facts };
+    if (changed) this.retireDiffReviewIO();
+  }
   /** Latest owner observation, or undefined if contact is unsupported or not observed. */
   get contactState(): ContactState | undefined {
     return this.observedContact;
@@ -135,13 +155,17 @@ export class DaemonConnection {
     )
       throw new Error("Daemon client is unavailable; reconnect after draining work.");
     this.admitting = true;
+    this.diffReviewPaused = false;
+    this.diffReviewBinding = undefined;
+    this.retireDiffReviewIO();
     this.lifecycleRevision++;
     this.contactRevision++;
+    const facts = { ...this.facts };
     const request = requestDaemon(
       this.paths,
       this.identity,
       "attach",
-      this.facts,
+      facts,
       signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal,
       this.options.mergeReview ? { reviewDetails: 1 } : undefined,
     );
@@ -152,11 +176,13 @@ export class DaemonConnection {
     try {
       const result = await request;
       admitted = true;
+      if (this.closed || this.disposing) throw new Error("Daemon client closed during attach.");
       this.publishContact(this.consume(result));
       this.observesState = record(result) && result.stateWait === 1;
       this.stateRevision = undefined;
       this.terminalJobs.clear();
       this.attached = true;
+      this.diffReviewBinding = facts;
       return this;
     } catch (error) {
       return withCleanup(
@@ -194,10 +220,15 @@ export class DaemonConnection {
     const lifecycle = this.lifecycleRevision;
     if (this.admitting || this.pausing || this.disposing)
       throw new Error("Daemon client is changing; wait before updating facts.");
+    facts = structuredClone(facts);
     const update = this.updates.then(async () => {
       if (this.closed || this.uncertain || this.resumeUncertain || lifecycle !== this.lifecycleRevision)
         throw new Error("Daemon client is unavailable; reconnect after draining work.");
       const revision = this.contactRevision;
+      if (!this.diffReviewBinding || !sameDiffReviewBinding(this.diffReviewBinding, facts)) {
+        this.diffReviewBinding = undefined;
+        this.retireDiffReviewIO();
+      }
       let result: unknown;
       try {
         result = await requestDaemon(this.paths, this.identity, "update", { facts }, this.controller.signal);
@@ -216,7 +247,7 @@ export class DaemonConnection {
       if (revision !== this.contactRevision) throw new Error("Daemon client changed during update.");
       const contact = this.consume(result);
       if (revision !== this.contactRevision) throw new Error("Daemon client changed during update.");
-      Object.assign(this.facts, facts);
+      this.setFacts(facts);
       this.publishContact(contact);
     });
     this.updates = update.catch(() => {});
@@ -247,7 +278,7 @@ export class DaemonConnection {
       const contact = this.consume(reply);
       ownedSignal.throwIfAborted();
       if (contact !== "active") throw new Error("Daemon did not confirm resumed contact.");
-      Object.assign(this.facts, facts);
+      this.setFacts(facts);
       this.publishContact(contact);
     });
     this.updates = attempt.catch(() => {});
@@ -291,6 +322,8 @@ export class DaemonConnection {
     )
       throw new Error("Daemon client is unavailable; confirm contact and drain work before submitting.");
     signal?.throwIfAborted();
+    if (operation === "diff.review" && !this.hasConfirmedDiffReviewBinding())
+      throw new Error("The daemon file review session is unconfirmed. Update session facts or reload Pi.");
     const { paths, identity } = this;
     const id = `${operationPrefix(identity)}${randomUUID()}`;
     const jobParams = { id, client: this.facts.id };
@@ -330,6 +363,14 @@ export class DaemonConnection {
       if (job.phase === "failed")
         throw new DaemonError(job.error ?? { name: "Error", message: "Daemon operation failed." });
       if (!foreground) signal?.throwIfAborted();
+      if (operation === "diff.review") {
+        try {
+          return parseDiffReviewInventory(job.result);
+        } catch (error) {
+          abort();
+          throw error;
+        }
+      }
       if (assertRoot && isForegroundQueueOutcome(job.result))
         this.foregroundRecovery = {
           job: id,
@@ -418,8 +459,100 @@ export class DaemonConnection {
           }
         }
       },
-    ).finally(() => {
-      this.pendingJobs.delete(id);
+    )
+      .catch((error: unknown) => {
+        if (operation !== "diff.review") throw error;
+        if (error instanceof DaemonError && error.remote.properties?.code === OWNERSHIP_CLEANUP_REQUIRED) {
+          throw new DaemonError({
+            name: "Error",
+            message: "Daemon ownership cleanup must be confirmed before opening a file review.",
+            properties: { code: OWNERSHIP_CLEANUP_REQUIRED },
+          });
+        }
+        if (this.uncertain)
+          throw new Error(
+            "The daemon diff review outcome is uncertain. Reload Pi to reconnect before opening a review.",
+          );
+        signal?.throwIfAborted();
+        if (error instanceof DaemonError && error.message === "Unsupported engine operation.")
+          throw new DaemonError({ name: "Error", message: "Unsupported engine operation." });
+        throw new Error("Could not open the daemon diff review. Check the connection and try again.");
+      })
+      .finally(() => {
+        this.pendingJobs.delete(id);
+      });
+  }
+  private retireDiffReviewIO() {
+    const io = this.diffReviewIO;
+    this.diffReviewIO = undefined;
+    io?.abort();
+  }
+  private hasConfirmedDiffReviewBinding() {
+    return this.diffReviewBinding !== undefined && sameDiffReviewBinding(this.diffReviewBinding, this.facts);
+  }
+  private canReadDiffReview() {
+    return (
+      this.attached &&
+      !this.admitting &&
+      !this.closed &&
+      !this.pausing &&
+      !this.diffReviewPaused &&
+      this.hasConfirmedDiffReviewBinding() &&
+      !this.disposing &&
+      !this.uncertain &&
+      this.contactResumeState === "idle" &&
+      this.contactState !== "expired" &&
+      this.contactState !== "inactive" &&
+      this.facts.mode === "tui" &&
+      this.facts.hasUI
+    );
+  }
+  private async diffReviewRequest<T>(
+    method: "diff-review-read" | "diff-review-close",
+    id: string,
+    fileId: string | undefined,
+    signal: AbortSignal | undefined,
+    stale: T,
+    decode: (reply: unknown) => T,
+  ): Promise<T> {
+    signal?.throwIfAborted();
+    if (!isDiffReviewId(id) || (method === "diff-review-read" && !isDiffReviewId(fileId)))
+      throw new Error("Invalid diff review identity.");
+    if (!this.canReadDiffReview()) return stale;
+    const binding = { ...this.facts };
+    this.diffReviewIO ??= new AbortController();
+    const io = this.diffReviewIO;
+    const current = () =>
+      this.diffReviewIO === io && this.canReadDiffReview() && sameDiffReviewBinding(binding, this.facts);
+    const owned = AbortSignal.any([
+      this.controller.signal,
+      io.signal,
+      AbortSignal.timeout(DIFF_REVIEW_REQUEST_MS),
+      ...(signal ? [signal] : []),
+    ]);
+    let reply: unknown;
+    try {
+      reply = await requestDaemon(
+        this.paths,
+        this.identity,
+        method,
+        { client: binding.id, generation: binding.generation, id, fileId },
+        owned,
+      );
+      owned.throwIfAborted();
+    } catch {
+      signal?.throwIfAborted();
+      if (!current()) return stale;
+      throw new Error("Daemon file review request failed. Try again or reopen the review.");
+    }
+    return current() ? decode(reply) : stale;
+  }
+  readDiffReview(id: string, fileId: string, signal?: AbortSignal): Promise<DiffReviewPreview> {
+    return this.diffReviewRequest("diff-review-read", id, fileId, signal, { kind: "stale" }, readDiffReviewPreview);
+  }
+  closeDiffReview(id: string, signal?: AbortSignal): Promise<void> {
+    return this.diffReviewRequest("diff-review-close", id, undefined, signal, undefined, (reply) => {
+      if (reply !== true) throw new Error("Invalid daemon diff review release acknowledgement.");
     });
   }
   canRecoverForeground(job: string): boolean {
@@ -453,11 +586,13 @@ export class DaemonConnection {
   }
   private markWorkUncertain() {
     this.uncertain = true;
+    this.retireDiffReviewIO();
     for (const callback of this.callbacks.values()) if (callback.kind !== "queue-release") callback.controller.abort();
   }
   private publishContact(contact: ContactState | undefined) {
     this.contactRevision++;
     this.observedContact = contact;
+    if (contact === "expired" || contact === "inactive") this.retireDiffReviewIO();
   }
   private consume(reply: unknown): ContactState | undefined {
     if (
@@ -789,11 +924,14 @@ export class DaemonConnection {
     if (this.closed || this.disposing) throw new Error("Daemon client is closed.");
     if (this.pausing) return this.pausing;
     this.resuming?.abort(new DOMException("Client paused", "AbortError"));
+    this.retireDiffReviewIO();
     this.lifecycleRevision++;
     this.contactRevision++;
     this.pausing = (async () => {
       const reply = await requestDaemon(this.paths, this.identity, "pause", { client: this.facts.id });
+      if (this.closed || this.disposing) return;
       const contact = this.consume(reply);
+      this.diffReviewPaused = true;
       if (!this.disposing) this.publishContact(contact);
     })().finally(() => {
       this.pausing = undefined;
@@ -804,6 +942,7 @@ export class DaemonConnection {
     if (this.disposing) return this.disposing;
     if (this.closed) return;
     this.resuming?.abort(new DOMException("Client disposed", "AbortError"));
+    this.retireDiffReviewIO();
     this.lifecycleRevision++;
     this.contactRevision++;
     this.disposing = (async () => {
@@ -826,6 +965,7 @@ export class DaemonConnection {
   }
   private async closeLocal() {
     this.closed = true;
+    this.retireDiffReviewIO();
     this.controller.abort(new DOMException("Client disposed", "AbortError"));
     this.callbackIO.abort(new DOMException("Client callback transport disposed", "AbortError"));
     for (const { controller } of this.callbacks.values()) controller.abort();

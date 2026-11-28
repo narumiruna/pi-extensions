@@ -183,8 +183,10 @@ function formatDiffDocument(content: string, width: number, theme: DocumentTheme
   const softWrapAfter: boolean[] = [];
   let remainingIntralineCodeUnits = MAX_INTRALINE_DOCUMENT_CODE_UNITS;
   const append = (rendered: readonly string[]) => {
-    lines.push(...rendered);
-    softWrapAfter.push(...rendered.map((_, index) => index < rendered.length - 1));
+    for (const [index, line] of rendered.entries()) {
+      lines.push(line);
+      softWrapAfter.push(index < rendered.length - 1);
+    }
   };
 
   for (let index = 0; index < sourceLines.length; ) {

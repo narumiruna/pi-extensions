@@ -1,4 +1,5 @@
 import { XMLParser } from "fast-xml-parser";
+import { SnapshotCaptureLimitError } from "../../snapshot/snapshot-capture-limit.js";
 import { ContinuousError, continuousFailure, retryAfter } from "../../sync/continuous-errors.js";
 import { throwIfAborted } from "../../sync/signals.js";
 import type { RemoteObject, ResolvedWebDavBackend } from "../backend-types.js";
@@ -63,15 +64,26 @@ export class WebDavClient {
     this.authorization = `Basic ${Buffer.from(`${config.profile.username}:${config.profile.password}`).toString("base64")}`;
   }
 
-  async getBuffer(remotePath: string): Promise<RemoteObject<Buffer>> {
-    const response = await this.request(remotePath, { method: "GET" });
+  async getBuffer(remotePath: string, maxBytes?: number): Promise<RemoteObject<Buffer>> {
+    const response = await this.request(remotePath, {
+      method: "GET",
+      ...(maxBytes === undefined ? {} : { headers: { "accept-encoding": "identity" } }),
+    });
     if (response.status === 404) {
       await response.body?.cancel();
       return { missing: true };
     }
     await this.requireOk(response, "read");
+    const encoding = response.headers.get("content-encoding")?.toLowerCase();
+    if (maxBytes !== undefined && encoding && encoding !== "identity") {
+      await response.body?.cancel().catch(() => undefined);
+      throw new SnapshotCaptureLimitError();
+    }
+    const limit = Math.min(maxBytes ?? SNAPSHOT_LIMIT, SNAPSHOT_LIMIT);
     return {
-      value: await readBounded(response, SNAPSHOT_LIMIT, "WebDAV response is too large"),
+      value: await readBounded(response, limit, () =>
+        maxBytes === undefined ? new Error("WebDAV response is too large") : new SnapshotCaptureLimitError(),
+      ),
       etag: response.headers.get("etag") ?? undefined,
       missing: false,
     };
@@ -84,7 +96,7 @@ export class WebDavClient {
       return { missing: true };
     }
     await this.requireOk(response, "read");
-    const bytes = await readBounded(response, JSON_LIMIT, "WebDAV JSON response is too large");
+    const bytes = await readBounded(response, JSON_LIMIT, () => new Error("WebDAV JSON response is too large"));
     try {
       return {
         value: JSON.parse(bytes.toString("utf8")) as T,
@@ -155,7 +167,9 @@ export class WebDavClient {
       throw new WebDavHttpError("WebDAV collection is missing.", 404);
     }
     if (response.status !== 207) await this.requireOk(response, "list collection");
-    const xml = (await readBounded(response, XML_LIMIT, "WebDAV directory response is too large")).toString("utf8");
+    const xml = (
+      await readBounded(response, XML_LIMIT, () => new Error("WebDAV directory response is too large"))
+    ).toString("utf8");
     try {
       const parsed = new XMLParser({
         removeNSPrefix: true,
@@ -236,7 +250,7 @@ export class WebDavClient {
 
   private async requireOk(response: Response, action: string) {
     if (response.ok) return;
-    const body = (await readBounded(response, ERROR_LIMIT, "WebDAV error body is too large"))
+    const body = (await readBounded(response, ERROR_LIMIT, () => new Error("WebDAV error body is too large")))
       .toString("utf8")
       // biome-ignore lint/suspicious/noControlCharactersInRegex: Remote error text is untrusted terminal input.
       .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
@@ -300,11 +314,11 @@ function safeSegments(value: string) {
   return segments;
 }
 
-async function readBounded(response: Response, limit: number, message: string) {
+async function readBounded(response: Response, limit: number, limitError: () => Error) {
   const length = Number(response.headers.get("content-length"));
   if (Number.isFinite(length) && length > limit) {
-    await response.body?.cancel();
-    throw new Error(message);
+    await response.body?.cancel().catch(() => undefined);
+    throw limitError();
   }
   if (!response.body) return Buffer.alloc(0);
   const reader = response.body.getReader();
@@ -315,12 +329,14 @@ async function readBounded(response: Response, limit: number, message: string) {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > limit) throw new Error(message);
+      if (total > limit) throw limitError();
       chunks.push(Buffer.from(value));
     }
   } catch (error) {
     await reader.cancel().catch(() => undefined);
     throw error;
+  } finally {
+    reader.releaseLock();
   }
   return Buffer.concat(chunks, total);
 }

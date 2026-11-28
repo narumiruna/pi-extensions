@@ -8,6 +8,7 @@ import {
   requireLegacyTransferPolicy,
   validateSnapshotSelection,
 } from "../sync/sync-policy.js";
+import { SnapshotCaptureLimitError } from "./snapshot-capture-limit.js";
 import { isSupportedSnapshotVersion, type Snapshot } from "./snapshot-types.js";
 
 const VERSION = 1;
@@ -38,7 +39,11 @@ export async function decodeSnapshot(
     write(chunk: Buffer, _encoding, callback) {
       total += chunk.byteLength;
       if (total > limit) {
-        callback(new Error(`Decompressed snapshot exceeds the ${limit}-byte limit.`));
+        callback(
+          options.maxOutputLength === undefined
+            ? new Error(`Decompressed snapshot exceeds the ${limit}-byte limit.`)
+            : new SnapshotCaptureLimitError(),
+        );
         return;
       }
       chunks.push(Buffer.from(chunk));

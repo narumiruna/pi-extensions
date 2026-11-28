@@ -42,6 +42,7 @@ export interface RunMenuOptions<State, Context extends MenuContext = ExtensionCo
 
 type InternalScreenEvent<ScreenId extends string> =
   | MenuScreenEvent
+  | { kind: "disposed" }
   | { kind: "transition"; transition: MenuTransition<ScreenId> };
 
 export async function runMenu<
@@ -126,7 +127,7 @@ async function runTuiMenu<State, ScreenId extends string, ActionId extends strin
           },
         },
       );
-      if (staleAction || !isMenuCurrent(options) || menuSignal.aborted) {
+      if (event?.kind === "disposed" || staleAction || !isMenuCurrent(options) || menuSignal.aborted) {
         return { kind: "stale" };
       }
       if (!event) {
@@ -189,46 +190,58 @@ async function showTuiScreen<ScreenId extends string, ActionId extends string, C
 ): Promise<InternalScreenEvent<ScreenId> | undefined> {
   let component: MenuScreenComponent | undefined;
   let removeAbortListener = () => {};
+  const unmounted = Promise.withResolvers<InternalScreenEvent<ScreenId>>();
   try {
-    return await uiFor(ctx).custom<InternalScreenEvent<ScreenId> | undefined>((tui, theme, keybindings, done) => {
-      const screenController = new AbortController();
-      let finished = false;
-      const finish = (event: InternalScreenEvent<ScreenId>) => {
-        if (finished) return;
-        finished = true;
-        screenController.abort(new DOMException("Menu screen completed", "AbortError"));
-        done(event);
-      };
-      const abortScreen = () => {
-        screenController.abort(new DOMException("Menu owner disposed", "AbortError"));
-        finish({ kind: "close" });
-      };
-      menuSignal.addEventListener("abort", abortScreen, { once: true });
-      removeAbortListener = () => menuSignal.removeEventListener("abort", abortScreen);
-      if (menuSignal.aborted) abortScreen();
-      component = createMenuScreenComponent({
-        screen,
-        selectedItemId,
-        searchQuery,
-        tui,
-        theme,
-        keybindings,
-        signal: screenController.signal,
-        isCurrent,
-        onEvent: finish,
-        onSelectionChange: callbacks.onSelectionChange,
-        onSearchQueryChange: callbacks.onSearchQueryChange,
-        onSettingChange: (change) => callbacks.onSettingChange(change, screenController.signal),
-        onMultiSelectChange: (change) => callbacks.onMultiSelectChange(change, screenController.signal),
-        onInputSubmit: (change) => callbacks.onInputSubmit(change, screenController.signal),
-        onTransition: (transition) => finish({ kind: "transition", transition }),
-        onDispose: () => {
-          removeAbortListener();
-          screenController.abort(new DOMException("Menu screen disposed", "AbortError"));
-        },
-      });
-      return component;
-    });
+    const interaction = uiFor(ctx).custom<InternalScreenEvent<ScreenId> | undefined>(
+      (tui, theme, keybindings, done) => {
+        const screenController = new AbortController();
+        let finished = false;
+        const finish = (event: InternalScreenEvent<ScreenId>) => {
+          if (finished) return;
+          finished = true;
+          screenController.abort(new DOMException("Menu screen completed", "AbortError"));
+          done(event);
+        };
+        const abortScreen = () => {
+          screenController.abort(new DOMException("Menu owner disposed", "AbortError"));
+          finish({ kind: "close" });
+        };
+        menuSignal.addEventListener("abort", abortScreen, { once: true });
+        removeAbortListener = () => menuSignal.removeEventListener("abort", abortScreen);
+        if (menuSignal.aborted) abortScreen();
+        const mounted = createMenuScreenComponent({
+          screen,
+          selectedItemId,
+          searchQuery,
+          tui,
+          theme,
+          keybindings,
+          signal: screenController.signal,
+          isCurrent,
+          onEvent: finish,
+          onSelectionChange: callbacks.onSelectionChange,
+          onSearchQueryChange: callbacks.onSearchQueryChange,
+          onSettingChange: (change) => callbacks.onSettingChange(change, screenController.signal),
+          onMultiSelectChange: (change) => callbacks.onMultiSelectChange(change, screenController.signal),
+          onInputSubmit: (change) => callbacks.onInputSubmit(change, screenController.signal),
+          onTransition: (transition) => finish({ kind: "transition", transition }),
+          onDispose: () => {
+            const disposed = !finished;
+            finished = true;
+            removeAbortListener();
+            screenController.abort(new DOMException("Menu screen disposed", "AbortError"));
+            if (disposed) {
+              queueMicrotask(() => {
+                if (component === mounted) unmounted.resolve({ kind: "disposed" });
+              });
+            }
+          },
+        });
+        component = mounted;
+        return mounted;
+      },
+    );
+    return await Promise.race([interaction, unmounted.promise]);
   } finally {
     removeAbortListener();
     try {

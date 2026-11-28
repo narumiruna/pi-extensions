@@ -92,7 +92,7 @@ Selecting a direction does not authorize background transfers or model use. If a
 
 Use the navigation keys to select an action or scroll when more actions are available. **Settings** and **History** are directly available. Switching appears only when multiple valid setups exist; review and access-recovery actions appear when needed.
 
-The summary distinguishes cached observations, recorded background state, and the last successful background transfer; none proves current remote equality. Missing or invalid background evidence is not shown as Waiting. Automatic-transfer permissions and possible AI costs remain visible when enabled; detailed preferences stay in Settings. Setup-specific actions stay bound to the displayed setup; if its configuration changes while the menu is open, review the refreshed setup before continuing. Choose **View differences** (`/sync diff`) for a manual read of current file differences, even with Debug mode off. It does not compare changes against the last sync. **Last applied snapshot** shows an ID, not the time it was applied. Long IDs are shortened in the menu; **History** shows the full ID.
+The summary distinguishes cached observations, recorded background state, and the last successful background transfer; none proves current remote equality. Missing or invalid background evidence is not shown as Waiting. Automatic-transfer permissions and possible AI costs remain visible when enabled; detailed preferences stay in Settings. Setup-specific actions stay bound to the displayed setup; if its configuration changes while the menu is open, review the refreshed setup before continuing. Choose **View differences** (`/sync diff`) to read current local and remote file differences, even with Debug mode off. In TUI, search the changed-file list and press Enter to open one read-only diff. The `−` lines are local and the `+` lines are remote; neither is a proposed transfer or a comparison against the last sync. Press Escape to return to the same list position and filter, or Ctrl+C to close the review. RPC keeps the file summary. **Last applied snapshot** shows an ID, not the time it was applied. Long IDs are shortened in the menu; **History** shows the full ID.
 
 After Pi Sync detects an included-content mismatch, the manager shows **Sync status: Review needed** and puts **Review synced content (recommended)** first.
 **Sync now** remains unavailable until you review the mismatch.
@@ -324,7 +324,7 @@ Use `/sync` for initial setup, masked credential entry, and operations that requ
 | `/sync use <setup>` | Switch the active local sync setup, following its switch policy. |
 | `/sync init` | Create a local configuration template. |
 | `/sync files` | Open the current setup’s path selection or agent-directory rules in TUI. |
-| `/sync diff` | Read current local and remote file differences without transferring files. |
+| `/sync diff` | Inspect changed files and open individual text diffs in TUI; show a file summary in RPC. No transfer. |
 | `/sync conflicts` | Review private unresolved dependency groups and choose local or remote group versions after fresh validation. |
 | `/sync push` | Publish local content to remote storage. |
 | `/sync pull` | Back up local content, then apply the remote snapshot. |

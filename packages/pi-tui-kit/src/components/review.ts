@@ -35,16 +35,26 @@ export type ReviewOptions<ScreenId extends string, ActionId extends string> = Me
   ActionId
 > & {
   screen: Extract<MenuScreen<ScreenId, ActionId>, { kind: "review" }>;
+  capturesViewportInput?: boolean;
 };
 
-interface ReviewComponent extends MenuScreenComponent {
+interface ReviewComponent extends MenuScreenComponent, Partial<Focusable> {
   render(width: number, floatingBodyRows?: number): string[];
 }
 
 export function createReviewComponent<ScreenId extends string, ActionId extends string>(
   options: ReviewOptions<ScreenId, ActionId>,
 ): ReviewComponent {
-  options = { ...options, keybindings: componentKeybindings(options.tui, options.keybindings) };
+  const capturesViewportInput = options.capturesViewportInput ?? false;
+  options = {
+    ...options,
+    keybindings: componentKeybindings(
+      options.tui,
+      options.keybindings,
+      capturesViewportInput,
+      capturesViewportInput ? Key.ctrl("c") : undefined,
+    ),
+  };
   let scrollOffset = 0;
   let lastMaximumScroll = 0;
   let lastViewportSize = reviewViewportSize(options.screen);
@@ -68,7 +78,7 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
   const search = options.screen.enableSearch ? new DocumentSearchController() : undefined;
   const searchActivationAvailable = Boolean(
     search &&
-      componentKeyAvailable(options.tui, DOCUMENT_SEARCH_ACTIVATE_KEY) &&
+      componentKeyAvailable(options.tui, DOCUMENT_SEARCH_ACTIVATE_KEY, capturesViewportInput) &&
       documentSearchActivationAvailable(options.keybindings, Boolean(options.screen.confirm)),
   );
 
@@ -95,7 +105,8 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
     else if (row >= scrollOffset + lastViewportSize) moveTo(row - lastViewportSize + 1);
   };
 
-  const component: ReviewComponent & Partial<Focusable> = {
+  const component: ReviewComponent = {
+    ...(capturesViewportInput ? { capturesViewportInput } : {}),
     render(width, floatingBodyRows) {
       if (!Number.isFinite(width) || width <= 0) {
         mouseLayout = undefined;
@@ -127,6 +138,7 @@ export function createReviewComponent<ScreenId extends string, ActionId extends 
         searchEnabled: searchActivationAvailable,
         searchActive,
         copyHint: copy.hint(searchActive),
+        alwaysShowHardCancel: capturesViewportInput,
         width: safeWidth,
         availableRows,
         hasOuterFrame: floatingBodyRows !== undefined,
@@ -285,6 +297,7 @@ interface AdaptiveReviewFrameOptions<ActionId extends string> {
   searchEnabled: boolean;
   searchActive: boolean;
   copyHint: string;
+  alwaysShowHardCancel: boolean;
   width: number;
   availableRows: number;
   hasOuterFrame: boolean;
@@ -340,6 +353,7 @@ function renderAdaptiveReviewFrame<ActionId extends string>(
     options.searchEnabled,
     options.searchActive,
     options.copyHint,
+    options.alwaysShowHardCancel,
   );
   const fullHint = wrapTextWithAnsi(options.theme.fg("dim", hintText), options.width).map((line) =>
     truncateToWidth(line, options.width, ""),
@@ -354,6 +368,7 @@ function renderAdaptiveReviewFrame<ActionId extends string>(
       options.searchEnabled,
       options.searchActive,
       options.copyHint,
+      options.alwaysShowHardCancel,
     ),
   );
 
@@ -498,6 +513,7 @@ function reviewHint(
   searchEnabled: boolean,
   searchActive: boolean,
   copyHint: string,
+  alwaysShowHardCancel: boolean,
 ) {
   if (searchActive) {
     const next = reviewBindingText(keybindings, "tui.altScreen.searchNext");
@@ -512,7 +528,14 @@ function reviewHint(
   }
   const base = menuHint(keybindings, destination, confirmAction);
   const search = searchEnabled ? DOCUMENT_SEARCH_ACTIVATE_KEY : "";
-  return [base, ...(search ? [`${search} search`] : []), copyHint].filter(Boolean).join(" · ");
+  return [
+    base,
+    ...(destination === "close" && alwaysShowHardCancel ? ["ctrl+c close"] : []),
+    ...(search ? [`${search} search`] : []),
+    copyHint,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function compactReviewHint(
@@ -523,6 +546,7 @@ function compactReviewHint(
   searchEnabled: boolean,
   searchActive: boolean,
   copyHint: string,
+  alwaysShowHardCancel: boolean,
 ) {
   if (searchActive) {
     const close = reviewBindingText(keybindings, "tui.altScreen.searchClose");
@@ -540,7 +564,7 @@ function compactReviewHint(
   return fitCompactHintSegments(
     [
       ...(cancel ? [`${cancel} ${destination}`] : []),
-      ...(destination === "back" || !cancel ? ["ctrl+c close"] : []),
+      ...(destination === "back" || !cancel || alwaysShowHardCancel ? ["ctrl+c close"] : []),
       ...(confirm && confirmAction ? [`${confirm} ${confirmAction}`] : []),
       ...(up || down ? [`${[up, down].filter(Boolean).join("/")} navigate`] : []),
       ...(search ? [`${search} search`] : []),

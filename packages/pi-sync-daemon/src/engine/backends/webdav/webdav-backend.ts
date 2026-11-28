@@ -59,16 +59,19 @@ export class WebDavSyncBackend implements SyncBackend {
     return remoteHead(pointer, this.identity, object.etag);
   }
 
-  async readSnapshot(reference: string, signal?: AbortSignal): Promise<Snapshot> {
+  async readSnapshot(reference: string, signal?: AbortSignal, maxBytes?: number): Promise<Snapshot> {
     requireSnapshotReference(reference);
     const expectedChecksum = this.checksums.get(reference) ?? (await this.resolveChecksum(reference, signal));
-    const object = await new WebDavClient(this.config, signal).getBuffer(snapshotPath(this.config, reference));
+    const object = await new WebDavClient(this.config, signal).getBuffer(
+      snapshotPath(this.config, reference),
+      maxBytes,
+    );
     throwIfAborted(signal);
     if (!object.value) throw new Error(`Snapshot not found: ${reference}`);
     if (!expectedChecksum || sha256(object.value) !== expectedChecksum) {
       throw new Error("Remote snapshot checksum mismatch.");
     }
-    const snapshot = await decodeSnapshot(object.value, { signal });
+    const snapshot = await decodeSnapshot(object.value, { signal, maxOutputLength: maxBytes });
     if (snapshot.id !== reference || snapshot.profile !== this.config.destination.namespace) {
       throw new Error("Remote snapshot identity mismatch.");
     }

@@ -73,6 +73,11 @@ export function createEngineService(root: string) {
         throw retiredIgnorePolicy("settings");
       execution.validate();
       if (operation !== "settings.repair-read" && operation !== "monitor.pause") assertNoRetiredRuleJournal();
+      if (operation === "diff.review") {
+        const { captureDiffReview } = await import("./engine/sync/diff-review-capture.js");
+        execution.validate();
+        return captureDiffReview(createServiceContext(execution), payload, execution);
+      }
       if (operation === "daemon.authorize") {
         return Boolean(await authorizeAfterExit(execution, payload));
       }

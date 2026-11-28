@@ -1,8 +1,12 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { OverlayOptions } from "@earendil-works/pi-tui";
+import { componentKeyAvailable } from "./components/host-input.js";
 import { prepareMenuScreenRendering } from "./components/mermaid.js";
 import { safeMenuText } from "./components/rendering.js";
-import { createReviewComponent, reviewDialogPages } from "./components/review.js";
-import { runCustomInteraction } from "./custom-interaction.js";
+import { createReviewComponent, type ReviewOptions, reviewDialogPages } from "./components/review.js";
+import { type RunCustomInteractionOptions, runCustomInteraction } from "./custom-interaction.js";
+import { type InternalInteractionUi, interactionUi } from "./custom-interaction-ui.js";
+import { createFloatingReview, fitsFloatingReview } from "./floating-review.js";
 import { callErrorReporter, notifyInteractionError } from "./interaction-error.js";
 import {
   type DocumentCopyAction,
@@ -17,6 +21,7 @@ export type { DocumentCopyAction, DocumentCopyContext } from "./types.js";
 
 type ExtensionMode = MenuContext["mode"];
 type DocumentReviewValue = { kind: "confirmed" } | { kind: "cancelled"; reason: MenuCloseReason };
+const INLINE_FALLBACK = Symbol();
 
 export interface DocumentReviewConfirmation {
   label: string;
@@ -28,6 +33,7 @@ export interface RunDocumentReviewOptions<Context extends MenuContext = Extensio
   content: string;
   format?: ReviewFormat;
   viewportSize?: number | "adaptive";
+  presentation?: "floating";
   /** Enable literal search over displayed document text in TUI mode. */
   enableSearch?: boolean;
   /** Copy the original content in place in TUI mode only. */
@@ -81,25 +87,51 @@ async function runTuiDocumentReview<Context extends MenuContext>(
   }
   if (!isCurrent(options) || options.signal?.aborted) return { kind: "stale" };
 
-  const result = await runCustomInteraction<DocumentReviewValue, Context>(ctx, {
-    signal: options.signal,
-    isCurrent: options.isCurrent,
-    onError: (currentCtx, error) => reportDocumentReviewError(currentCtx, options, error),
-    create: ({ tui, theme, keybindings, complete, signal }) =>
-      createReviewComponent<"review", "confirm">({
-        screen,
-        tui,
-        theme,
-        keybindings,
-        signal,
-        isCurrent: options.isCurrent,
-        onEvent: (event) => {
-          if (event.kind === "activate") complete({ kind: "confirmed" });
-          else complete({ kind: "cancelled", reason: event.kind });
-        },
-      }),
-  });
-  return result.kind === "completed" ? result.value : result;
+  const prefersFloating = options.presentation === "floating";
+  let result = await interact(prefersFloating);
+  if (result.kind === "completed" && result.value === INLINE_FALLBACK) result = await interact(false);
+  if (result.kind !== "completed") return result;
+  return result.value === INLINE_FALLBACK ? { kind: "stale" } : result.value;
+
+  function interact(floating: boolean) {
+    let overlayOptions: OverlayOptions = {};
+    const interaction: RunCustomInteractionOptions<DocumentReviewValue | typeof INLINE_FALLBACK, Context> &
+      InternalInteractionUi = {
+      signal: options.signal,
+      isCurrent: options.isCurrent,
+      onError: (currentCtx, error) => reportDocumentReviewError(currentCtx, options, error),
+      ...(floating ? { [interactionUi]: { overlay: true, overlayOptions: () => overlayOptions } } : {}),
+      create: ({ tui, theme, keybindings, complete, signal }) => {
+        if (prefersFloating && !componentKeyAvailable(tui, "ctrl+c", true)) {
+          throw new Error(
+            "Cannot open the review: native fullscreen search owns Ctrl+C. Change that binding or exit fullscreen first.",
+          );
+        }
+        if (floating && !fitsFloatingReview(tui.terminal)) {
+          complete(INLINE_FALLBACK);
+          return { render: () => [], invalidate() {} };
+        }
+        const reviewOptions: ReviewOptions<"review", "confirm"> = {
+          screen,
+          tui,
+          theme,
+          keybindings,
+          signal,
+          isCurrent: options.isCurrent,
+          capturesViewportInput: prefersFloating,
+          onEvent: (event) => {
+            if (event.kind === "activate") complete({ kind: "confirmed" });
+            else complete({ kind: "cancelled", reason: event.kind });
+          },
+        };
+        if (!floating) return createReviewComponent(reviewOptions);
+        const frame = createFloatingReview({ ...reviewOptions, tui });
+        overlayOptions = frame.overlayOptions;
+        return frame;
+      },
+    };
+    return runCustomInteraction(ctx, interaction);
+  }
 }
 
 async function runRpcDocumentReview<Context extends MenuContext>(
