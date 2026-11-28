@@ -67,8 +67,8 @@
     "@earendil-works/pi-coding-agent": "1.6.0",
     "@earendil-works/pi-durable": "1.6.0",
     "@earendil-works/chord": "1.6.0",
-    "@types/node": "26.6.6",
-    "protobufjs": "7.6.5",
+    "@types/node": "26.6.9",
+    "protobufjs": "8.8.1",
     "typescript": "7.0.2",
     "esbuild": "0.28.2"
   },

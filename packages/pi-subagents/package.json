@@ -43,7 +43,7 @@
     "@earendil-works/pi-ai": "1.6.0",
     "@earendil-works/pi-coding-agent": "1.6.0",
     "@earendil-works/pi-tui": "1.6.0",
-    "@types/node": "26.6.6",
+    "@types/node": "26.6.9",
     "esbuild": "0.28.2",
     "typebox": "1.4.7",
     "typescript": "7.0.2"
