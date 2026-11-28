@@ -2,6 +2,13 @@
 
 This changelog retains the published `@narumitw/pi-todo` predecessor history below the first `pi-progress` release.
 
+## 0.8.5
+
+### Patch Changes
+
+- Updated dependencies [bb17df4]
+  - @narumitw/pi-tui-kit@0.75.0
+
 ## 0.8.4
 
 ### Patch Changes

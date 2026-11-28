@@ -1,5 +1,12 @@
 # @narumitw/pi-tool
 
+## 0.4.8
+
+### Patch Changes
+
+- Updated dependencies [bb17df4]
+  - @narumitw/pi-tui-kit@0.75.0
+
 ## 0.4.7
 
 ### Patch Changes

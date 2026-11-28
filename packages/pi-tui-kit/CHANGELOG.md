@@ -1,5 +1,11 @@
 # @narumitw/pi-tui-kit
 
+## 0.75.0
+
+### Minor Changes
+
+- bb17df4: Add optional minimize, maximize, and close controls to Kit floating frames. Use them in BTW to resize or dismiss the floating side thread without losing its draft when switching window sizes.
+
 ## 0.74.0
 
 ### Minor Changes

@@ -1,5 +1,12 @@
 # @narumitw/pi-recall
 
+## 0.50.16
+
+### Patch Changes
+
+- Updated dependencies [bb17df4]
+  - @narumitw/pi-tui-kit@0.75.0
+
 ## 0.50.15
 
 ### Patch Changes
