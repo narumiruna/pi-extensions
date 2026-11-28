@@ -28,6 +28,25 @@ test("passive widget entry keeps its eager graph limited to display helpers and 
   assert.ok(external.every((entry) => entry.external && entry.path === "@earendil-works/pi-tui"));
 });
 
+test("floating frame entry loads only native Pi TUI", async () => {
+  const result = await build({
+    entryPoints: [path.join(packageRoot, "dist/floating-frame.js")],
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    packages: "external",
+    write: false,
+    metafile: true,
+  });
+  assert.deepEqual(
+    Object.keys(result.metafile.inputs).map((input) => path.basename(input)),
+    ["floating-frame.js"],
+  );
+  const imports = Object.values(result.metafile.outputs).flatMap((output) => output.imports);
+  assert.ok(imports.length > 0);
+  assert.ok(imports.every((entry) => entry.external && entry.path === "@earendil-works/pi-tui"));
+});
+
 test("fullscreen handoff entry has no eager runtime dependencies", async () => {
   const result = await build({
     entryPoints: [path.join(packageRoot, "dist/fullscreen-handoff.js")],
@@ -78,6 +97,7 @@ test("built package entrypoints resolve their documented exports", async (t) => 
   const customInteractionSpecifier = "@narumitw/pi-tui-kit/custom-interaction";
   const documentReviewSpecifier = "@narumitw/pi-tui-kit/document-review";
   const editorStatusWidgetSpecifier = "@narumitw/pi-tui-kit/editor-status-widget";
+  const floatingFrameSpecifier = "@narumitw/pi-tui-kit/floating-frame";
   const fullscreenHandoffSpecifier = "@narumitw/pi-tui-kit/fullscreen-handoff";
   const interactionHintsSpecifier = "@narumitw/pi-tui-kit/interaction-hints";
   const liveChoiceSpecifier = "@narumitw/pi-tui-kit/live-choice";
@@ -93,6 +113,7 @@ test("built package entrypoints resolve their documented exports", async (t) => 
   const customInteraction = await import(customInteractionSpecifier);
   const documentReview = await import(documentReviewSpecifier);
   const editorStatusWidget = await import(editorStatusWidgetSpecifier);
+  const floatingFrame = await import(floatingFrameSpecifier);
   const fullscreenHandoff = await import(fullscreenHandoffSpecifier);
   const interactionHints = await import(interactionHintsSpecifier);
   const keySyntaxSpecifier = "@narumitw/pi-tui-kit/key-syntax";
@@ -123,6 +144,7 @@ test("built package entrypoints resolve their documented exports", async (t) => 
   assert.equal(typeof production.HorizontalRule, "function");
   assert.equal(typeof production.runConfirmation, "function");
   assert.equal(typeof production.runCustomInteraction, "function");
+  assert.equal(production.FloatingFrame, floatingFrame.FloatingFrame);
   assert.equal(production.createFullscreenHandoff, fullscreenHandoff.createFullscreenHandoff);
   for (const helper of ["FullscreenTerminal", "createFullscreenHarness", "fullscreenMounted"]) {
     assert.equal(helper in production, false);
@@ -146,6 +168,7 @@ test("built package entrypoints resolve their documented exports", async (t) => 
   assert.deepEqual(Object.keys(customInteraction), ["runCustomInteraction"]);
   assert.deepEqual(Object.keys(documentReview), ["runDocumentReview"]);
   assert.deepEqual(Object.keys(editorStatusWidget), ["EditorStatusWidget"]);
+  assert.deepEqual(Object.keys(floatingFrame), ["FloatingFrame"]);
   assert.deepEqual(Object.keys(fullscreenHandoff), ["createFullscreenHandoff"]);
   assert.deepEqual(Object.keys(interactionHints), ["formatInteractionHints"]);
   assert.deepEqual(Object.keys(liveChoice), ["runLiveChoice"]);
@@ -175,6 +198,10 @@ test("built package entrypoints resolve their documented exports", async (t) => 
       `import { runCustomInteraction, type RunCustomInteractionResult } from "@narumitw/pi-tui-kit/custom-interaction";\n` +
       `import { runDocumentReview, type DocumentReviewConfirmation, type DocumentCopyAction as FocusedCopyAction, type DocumentCopyContext as FocusedCopyContext } from "@narumitw/pi-tui-kit/document-review";\n` +
       `import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";\n` +
+      `import { FloatingFrame, type FloatingViewport, type FloatingFrameOptions } from "@narumitw/pi-tui-kit/floating-frame";\n` +
+      `declare const floatingOptions: FloatingFrameOptions;\n` +
+      `const floating: import("@narumitw/pi-tui-kit").FloatingFrame = new FloatingFrame(floatingOptions);\n` +
+      `const viewport: FloatingViewport = floating.viewport; floating.move(1, 1); floating.resize(1, 1); void viewport;\n` +
       `import { createFullscreenHandoff, type FullscreenHandoff, type FullscreenHandoffOptions } from "@narumitw/pi-tui-kit/fullscreen-handoff";\n` +
       `declare const parent: import("@earendil-works/pi-tui").TUI;\n` +
       `const handoffOptions: FullscreenHandoffOptions = { isCurrent: () => true, canRestoreParent: () => true };\n` +

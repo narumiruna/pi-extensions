@@ -20,7 +20,7 @@ type RuntimeOptions = NonNullable<Parameters<typeof import("../src/plan-mode.js"
 
 async function fixture(
   mode: ExtensionContext["mode"] = "tui",
-  planPane?: "left" | "right" | "off",
+  planPane?: "left" | "right" | "floating" | "off",
   options: RuntimeOptions & { agentDirectory?: string } = {},
 ) {
   const directory = options.agentDirectory ?? (await mkdtemp(join(tmpdir(), "pi-plan-pane-runtime-")));
@@ -35,6 +35,7 @@ async function fixture(
     mode,
     hasUI: mode === "tui" || mode === "rpc",
     cwd: directory,
+    ...(planPane === "floating" ? { custom: terminal.custom } : {}),
     onTerminalInput: (listener: Parameters<ExtensionContext["ui"]["onTerminalInput"]>[0]) =>
       terminal.host.addInputListener(listener),
     sessionManager: { getSessionId: () => "pane", getBranch: () => branch, getEntries: () => branch },
@@ -75,6 +76,8 @@ async function fixture(
     await invoke("start");
     const tool = mock.tools.find(({ name }) => name === "plan_mode_complete") as unknown as ToolDefinition;
     assert.ok(tool);
+    const question = mock.tools.find(({ name }) => name === "plan_mode_question") as unknown as ToolDefinition;
+    assert.ok(question);
     return {
       close,
       context,
@@ -106,6 +109,26 @@ async function fixture(
       },
       complete: (id: string, plan: string) =>
         tool.execute(id, { plan }, undefined, undefined, ctx as Parameters<typeof tool.execute>[4]),
+      ask: () =>
+        question.execute(
+          "pane-question",
+          {
+            questions: [
+              {
+                id: "details",
+                header: "Details",
+                question: "Which details should we use?",
+                options: [
+                  { label: "Small", description: "A compact set" },
+                  { label: "Large", description: "A full set" },
+                ],
+              },
+            ],
+          },
+          undefined,
+          undefined,
+          ctx as Parameters<typeof question.execute>[4],
+        ),
       row(id: string, started = true) {
         const row = new ToolExecutionComponent(tool.name, id, {}, {}, tool, terminal.host, directory);
         if (started) row.markExecutionStarted();
@@ -487,6 +510,39 @@ test("partial, error, stale, and replayed results never use a visible pane in pl
     assert.doesNotMatch(rendered(revisedRow), CONFIRMATION);
   } finally {
     await f.close();
+  }
+});
+
+test("floating completion stays complete while a native Plan questionnaire takes precedence", async () => {
+  const f = await fixture("tui", "floating");
+  let question: ReturnType<typeof f.ask> | undefined;
+  try {
+    const result = await f.complete("live", PLAN);
+    const row = f.row("live");
+    row.updateResult({ ...result, isError: false, durationMs: 0 });
+    assert.match(rendered(row), /DecisionMarker/u);
+    await vi.waitFor(async () => assert.match(await f.frame(), /Plan · Ready/u));
+    assert.match(rendered(row), CONFIRMATION);
+    f.terminal.send("\x1b[21~");
+    assert.equal(f.terminal.overlays[0].isFocused(), true);
+    question = f.ask();
+    await vi.waitFor(async () => assert.match(await f.frame(), /Which details should we use\?/u));
+    assert.doesNotMatch(await f.frame(), /Plan · Ready/u);
+    assert.match(rendered(row), /DecisionMarker/u);
+    assert.equal(f.terminal.closes, 1);
+    f.terminal.send("\x1b[21~");
+    assert.match(await f.frame(), /Which details should we use\?/u);
+    f.terminal.send("\x03");
+    await question;
+    await vi.waitFor(async () => assert.match(await f.frame(), /Plan · Ready/u));
+    assert.equal(f.terminal.host.getFocusedComponent(), f.terminal.editor);
+    assert.match(rendered(row), CONFIRMATION);
+    await f.emit("session_shutdown", { reason: "reload" });
+    assert.match(rendered(row), /DecisionMarker/u);
+    assert.equal(f.terminal.closes, 2);
+  } finally {
+    await f.close();
+    await question;
   }
 });
 

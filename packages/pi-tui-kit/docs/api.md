@@ -13,6 +13,7 @@
 - [Mermaid Markdown transformers](#mermaid-markdown-transformers)
 - [Standard screens](#-standard-screens)
 - [Runtime and mode behavior](#-runtime-and-mode-behavior)
+- [Floating frame](#floating-frame)
 - [Fullscreen terminal handoff](#fullscreen-terminal-handoff)
 - [Ownership boundary](#-ownership-boundary)
 - [Testing entrypoint](#-supported-testing-entrypoint)
@@ -1092,6 +1093,17 @@ Pi ignores blocked metadata on overlays; Kit does not expose overlay options or 
 RPC questionnaires retain native dialog status; print and JSON behavior is unchanged.
 This option does not change footer prompt events or repair a host runner's unresolved custom-prompt span after dispose-only teardown.
 Review screens return no rows for non-positive or non-finite widths and rebuild their display caches on theme invalidation; raw document content remains unchanged.
+
+### Floating frame
+
+Import `FloatingFrame` from `@narumitw/pi-tui-kit/floating-frame` (also available from the root). It renders a bordered, movable, resizable component without taking ownership of the terminal or of the interaction that mounts it. The focused import depends only on Pi TUI.
+
+- Supply the live terminal size (or the part available to the overlay), initial bounds, minimum size, title, and theme callbacks. `bounds` returns the current terminal-relative rectangle; `viewport` gives the inner columns and rows. `body.render(viewport)` receives the inner size at render time. The frame clips and pads its body without modifying the returned lines.
+- Pass the original `frame.overlayOptions` to Pi’s overlay API: its geometry fields are live getters, so do not copy them into a snapshot. Use Pi’s `nonCapturing` option for a passive window. For `ctx.ui.custom()`, keep the owned handle for focus/visibility and close with `done()`. The frame does not start, stop, or close an overlay.
+- Translate the consumer’s active keys into `frame.move(dx, dy)` and `frame.resize(dx, dy)`; values are cell deltas. The frame bounds changes to the available area and requests a render. It forwards focused input to the body without choosing keys or interpreting cancellation.
+- Pi fullscreen mode can dispatch a title or bottom-right drag. A drag captures the pointer sequence but does not request keyboard focus unless `focusOnDrag` is set. Body mouse events use coordinates relative to the frame’s interior. If the body handles a press, its drag and release can arrive outside the interior and have negative or out-of-range coordinates. Pi regular mode leaves mouse handling to the terminal, so interactive consumers need a keyboard path.
+
+BTW uses the frame in a modal composer and Plan Mode uses it for a passive read-only preview. Each owns its visibility, focus transitions, and data lifecycle. After building all three packages, run `node test/floating-frame-artifact-smoke.mjs` from the repository root to verify the installed export and both generated floating paths in an isolated test terminal.
 
 ### Fullscreen terminal handoff
 

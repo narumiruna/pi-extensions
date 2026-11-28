@@ -43,7 +43,7 @@ test("Plan-mode settings validate inherit and fixed thinking levels", async () =
 
 test("Plan pane settings default to right and accept only supported placements", () => {
   assert.equal(configuredPlanPane({ thinkingLevel: "inherit" }), "right");
-  for (const planPane of ["right", "left", "off"] as const) {
+  for (const planPane of ["right", "left", "floating", "off"] as const) {
     assert.deepEqual(normalizePlanModeSettings({ planPane }), { thinkingLevel: "inherit", planPane });
   }
   for (const planPane of ["bottom", "RIGHT", true, null, { side: "left" }]) {

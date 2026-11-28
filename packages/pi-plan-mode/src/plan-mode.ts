@@ -189,18 +189,15 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let shutdownTask: Promise<void> | undefined;
   let widgetState: EditorStatusWidgetState = { collapsed: false };
   const planPane = createPlanPaneController();
-  const paneShortcut = createPlanPaneShortcut(pi, (ctx) => {
-    if (
-      shutdownStarted ||
-      currentSession !== ctx.sessionManager ||
-      !state.enabled ||
-      !workflowMutex.isOwner(workflowOwner)
-    )
-      return;
-    if (ctx.mode === "tui" && ctx.hasUI && configuredPlanPane(settings) !== "off") {
-      planPane.toggle(ctx.sessionManager);
-    }
-  });
+  const ownsPlanPane = (ctx: ExtensionContext) =>
+    !shutdownStarted && currentSession === ctx.sessionManager && state.enabled && workflowMutex.isOwner(workflowOwner);
+  const paneShortcut = createPlanPaneShortcut(
+    pi,
+    (ctx) => {
+      if (ownsPlanPane(ctx)) planPane.toggle(ctx.sessionManager);
+    },
+    (ctx, data, canToggle) => ownsPlanPane(ctx) && planPane.handleInput(ctx.sessionManager, data, canToggle),
+  );
   let liveCompletion: { session: ExtensionContext["sessionManager"]; toolCallId: string; plan: string } | undefined;
   const draft = createPlanDraftController();
   let interactiveUiPromise: Promise<InteractiveUi> | undefined;
@@ -345,7 +342,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         );
       }
 
-      return interaction.answer(toolCallId, parsed.questions, ctx, signal);
+      const resumePane = ownsPlanPane(ctx) ? planPane.pauseForQuestion() : undefined;
+      try {
+        return await interaction.answer(toolCallId, parsed.questions, ctx, signal);
+      } finally {
+        resumePane?.();
+      }
     },
   });
 
@@ -632,6 +634,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (generation !== menuGeneration || menuController.signal.aborted) return;
     initializePlanModeShortcut();
     interaction.startSession(ctx, startupToggleShortcut);
+    planPane.setPlanModeShortcut(startupToggleShortcut);
     paneShortcut.startSession(ctx, startupToggleShortcut);
     startPlanModeSettingsWatch(generation);
     if (!installRestoredState(restoredState, ctx)) return;
