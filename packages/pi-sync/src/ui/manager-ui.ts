@@ -13,7 +13,7 @@ import {
 } from "./manager-attention.js";
 import { recoverSyncAccess } from "./manager-recovery.js";
 import { dispatchManagerResult } from "./manager-result-dispatcher.js";
-import { backendStorageDescription, describeManagerState } from "./manager-state.js";
+import { describeManagerState } from "./manager-state.js";
 import { showSyncSettings } from "./settings-ui.js";
 import { showSyncSetupManager } from "./setup/setup-actions.js";
 import { showSetupSwitcher } from "./setup/setup-switcher.js";
@@ -52,12 +52,10 @@ export async function showSyncManager(
     | "pull"
     | "push"
     | "diff"
-    | "status"
     | "setups"
     | "connections"
     | "history"
     | "conflicts"
-    | "doctor"
     | "recover"
     | "daemon-recovery"
     | "refresh"
@@ -116,13 +114,11 @@ export async function showSyncManager(
             id: item.id,
             label: ctx.mode === "tui" && item.id === "sync" ? "Sync…" : item.label,
             details: [item.description ?? "Review synced content."],
-            searchText: `${item.label} ${item.description ?? ""}`,
             disabled: item.disabled,
             disabledReason: item.disabledReason,
           })),
           action: "activate",
-          enableSearch: true,
-          viewportSize: 5,
+          viewportSize: 6,
           hint: "close",
         };
       },
@@ -211,7 +207,7 @@ export async function showSyncManager(
           commitAware: true,
           cancelAcrossDialogs: true,
           target: state.manager.configReview?.setupName,
-          cancelledMessage: "History review cancelled; no files were changed.",
+          cancelledMessage: "History review cancelled.",
         });
         return { kind: result.kind === "closed" ? "close" : "stay" };
       },
@@ -219,38 +215,6 @@ export async function showSyncManager(
         const result = await runCancellableOperation(ctx, "Comparing local and remote…", "diff", runRoute, {
           target: state.manager.configReview?.setupName,
           signal: sessionSignal,
-        });
-        return { kind: result.kind === "closed" ? "close" : "stay" };
-      },
-      status: async ({ state }) => {
-        const result = await runCancellableOperation(ctx, "Checking remote status…", "status", runRoute, {
-          target: state.manager.configReview?.setupName,
-          signal: sessionSignal,
-        });
-        return { kind: result.kind === "closed" ? "close" : "stay" };
-      },
-      doctor: async ({ state, signal: actionSignal }) => {
-        const signal = sessionSignal ? AbortSignal.any([sessionSignal, actionSignal]) : actionSignal;
-        const validate = captureMutationOwner(ctx, signal);
-        const config = await loadConfig(state.manager.configReview?.setupName);
-        validate();
-        const confirmed = await ctx.ui.confirm(
-          "Run diagnostics?",
-          `Setup: ${safeTerminalText(config.setupName)}\nStorage: ${backendStorageDescription(config)}\nS3/R2 reads the latest pointer without writing. Git reads remote snapshots and checks its cache. WebDAV probes conditional writes and cleanup, and can repair a missing history entry. Possible-secret checks still run. This is not the read-only Check remote status action.`,
-          { signal },
-        );
-        if (signal.aborted) return { kind: "close" };
-        validate();
-        if (!confirmed) return { kind: "stay" };
-        const latest = await loadConfig();
-        validate();
-        if (syncCheckConfigFingerprint(config) !== syncCheckConfigFingerprint(latest)) {
-          ctx.ui.notify("Setup changed during diagnostics review; reopen Diagnostics.", "warning");
-          return { kind: "stay" };
-        }
-        const result = await runCancellableOperation(ctx, "Checking setup access…", "doctor", runRoute, {
-          signal,
-          target: config.setupName,
         });
         return { kind: result.kind === "closed" ? "close" : "stay" };
       },
@@ -292,8 +256,6 @@ export async function showSyncManager(
     "push",
     "history",
     "diff",
-    "status",
-    "doctor",
     "conflicts",
   ] as const) {
     const activate = menu.actions[action];
@@ -378,14 +340,12 @@ function syncMainMenuItem(
   | "pull"
   | "push"
   | "diff"
-  | "status"
   | "switch"
   | "settings"
   | "setups"
   | "connections"
   | "history"
   | "conflicts"
-  | "doctor"
   | "recover"
   | "daemon-recovery"
   | "refresh"
@@ -397,11 +357,9 @@ function syncMainMenuItem(
     "Pull from remote": "pull",
     "Push to remote": "push",
     "View differences": "diff",
-    "Check remote status": "status",
     "Switch sync setup": "switch",
     Settings: "settings",
     History: "history",
-    Diagnostics: "doctor",
     "Review unresolved conflicts": "conflicts",
     "Restore sync access… (recommended)": "recover",
     "Stop daemon for recovery…": "daemon-recovery",
@@ -423,10 +381,8 @@ function syncMainMenuItem(
       pull: "Remote → this device; replaces conflicting local files.",
       push: "This device → remote; replaces conflicting remote files.",
       diff: "Inspect changes; no transfer.",
-      status: "Check remote; no transfer.",
       settings: "Edit settings, setups, and storage connections.",
-      history: "Review snapshots and rollback.",
-      doctor: "Review backend diagnostics.",
+      history: "Review snapshots and recovery options.",
       switch: "Choose another sync setup.",
       conflicts: "Review unresolved file groups.",
       recover: "Review local lock recovery.",

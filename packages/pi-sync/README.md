@@ -75,7 +75,7 @@ WebDAV and R2/S3 store `latest.json`, `history.json`, and `snapshots/` directly 
 
 ## 🧭 Manager, conflicts, and recovery
 
-The `/sync` manager opens a searchable action palette in TUI mode, with up to five visible choices and help for only the selected action. The heading identifies the active setup without relying on the summary, which can be hidden in a short terminal. The summary uses local state without contacting remote storage and shows the configured storage path:
+The `/sync` manager opens an action list in TUI mode, with up to six visible choices and help for only the selected action. The heading identifies the active setup without relying on the summary, which can be hidden in a short terminal. The summary uses local state without contacting remote storage and shows the configured storage path:
 
 ```text
 Manage sync · home
@@ -86,16 +86,16 @@ Last applied: Never synced
 
 Use **Sync…** (**Sync now** in RPC) to merge both ways. **Push to remote** uses this device's version for managed files; **Pull from remote** uses the remote version. After initial daemon handover, each choice can replace or remove managed files at the destination without a second transfer confirmation. Push preserves the previous remote version in **History**; Pull creates a local backup before applying changes. History rollback still follows the current sync rules; see [Recover excluded files from History](#recover-excluded-files-from-history) for files those rules no longer select. Use **View differences** first if you want a preview. Selecting a direction does not authorize background transfers or model use. If a file-queue release cannot be confirmed, Pi Sync attempts recovery within the same action. It does not repeat a known commit or guess when the write outcome is unknown. Use the same **Pull from remote** action to review and continue a pending ignore-rule Pull. It uses the recorded snapshot, not the latest remote snapshot. See [daemon recovery](./docs/daemon-migration.md#recover-from-uncertain-daemon-cleanup) if it cannot recover the owner.
 
-Type to filter actions; navigation scrolls the list. **Settings**, **History**, and **Diagnostics** remain directly available. Switching appears only when multiple valid setups exist; review and access-recovery actions appear when needed.
+Use the navigation keys to select an action or scroll when more actions are available. **Settings** and **History** are directly available. Switching appears only when multiple valid setups exist; review and access-recovery actions appear when needed.
 
-The summary distinguishes cached observations, recorded background state, and the last successful background transfer; none proves current remote equality. Missing or invalid background evidence is not shown as Waiting. Automatic-transfer permissions and possible AI costs remain visible when enabled; detailed preferences stay in Settings. Setup-specific actions stay bound to the displayed setup; if its configuration changes while the menu is open, review the refreshed setup before continuing. Choose **Check remote status** for a fresh check or **View differences** for file differences; `/sync status`, `/sync diff`, and `/sync help` remain available. Last applied shows a compact snapshot ID and states when application time is unavailable; History retains full IDs.
+The summary distinguishes cached observations, recorded background state, and the last successful background transfer; none proves current remote equality. Missing or invalid background evidence is not shown as Waiting. Automatic-transfer permissions and possible AI costs remain visible when enabled; detailed preferences stay in Settings. Setup-specific actions stay bound to the displayed setup; if its configuration changes while the menu is open, review the refreshed setup before continuing. Choose **View differences** (`/sync diff`) for a manual read of current file differences, even with Debug mode off. It does not compare changes against the last sync. Last applied shows a compact snapshot ID and states when application time is unavailable; History retains full IDs.
 
 After Pi Sync detects an included-content mismatch, the manager shows **Sync status: Review needed** and puts **Review synced content (recommended)** first.
 **Sync now** remains unavailable until you review the mismatch.
 Opening the manager does not make another remote request.
 **Settings** opens **Pi Sync Settings** directly as one searchable list. It shows the content-policy controls for the current setup. Compare the remote path policy separately from file contents. **Storage location** edits only the current setup's bucket, branch, or path; it does not change the connection or included content. **Manage sync setups** and **Manage storage connections** open the existing catalogs. Connections hold reusable server addresses and sign-in details, and edits show every affected setup. Make another setup current before changing its preferences. Each description identifies the setup, device-wide, or shared-connection scope. Simple preferences report saving and durable save results; Back does not undo saved changes. Complex editors and risky changes retain their reviews. RPC reports the manual settings path and preserves catalog management without opening the TUI preference editor.
 
-**Diagnostics** asks for confirmation before checking configuration and storage. `/sync doctor` remains the direct route. S3/R2 performs a read-only request: success does not prove write access or snapshot validity, and an ambiguous 404 does not prove a bucket is missing. Check the indicated credentials, address, bucket, or path before retrying. Git checks remote reads and the local cache, not write access. WebDAV uses an isolated write/cleanup probe and repairs the active snapshot's history entry if missing. **History** opens the snapshot list directly for reviewed rollback. Recorded unresolved groups have a separate **Review unresolved conflicts** action.
+**History** shows snapshots for reviewed rollback and offers [WebDAV history repair](#-backend-and-recovery-model) when the active snapshot is missing from the list. Use **Review unresolved conflicts** for recorded unresolved groups.
 
 On secondary menus, **Back** and Escape return to the previous screen. In setup inputs and save reviews, cancellation (including Ctrl+C) discards the current unsaved draft and returns to its owning menu. Session replacement or shutdown closes the owning flow.
 Specialized operation and masked-credential prompts show the effective cancellation bindings and keep Ctrl+C as a hard-cancel input when Back is remapped.
@@ -185,7 +185,7 @@ Legacy directory scope selects all eligible files, applies `exclude`, then resto
 
 Turn on **/sync → Settings → Debug mode**, or set the top-level `"debug": true` in `pi-sync.json`. The default is **Off**. Use `/reload` or start a new Pi session for the client change. The daemon uses the agent directory's setting at its next owner or job boundary without a restart.
 
-Both processes append startup timings and selected sync outcomes to the private, local-only `<getAgentDir()>/pi-sync.log` (normally `~/.pi/agent/pi-sync.log`). It uses one JSON record per line; filter by `source` (`pi-sync` or `pi-sync-daemon`). Records omit raw errors, credentials, file contents, and model data. Turning Debug mode Off does not remove the file, and nothing rotates it automatically.
+Both processes append startup timings and selected check and transfer outcomes to the private, local-only `<getAgentDir()>/pi-sync.log` (normally `~/.pi/agent/pi-sync.log`). It uses one JSON record per line; filter by `source` (`pi-sync` or `pi-sync-daemon`). Records omit raw errors, credentials, file contents, and model data. Turning Debug mode Off does not remove the file, and nothing rotates it automatically.
 
 Timing reports still appear in the TUI transcript or as RPC notifications without entering model context. The Pi client does not write debug records in print or JSON mode. The daemon's separate operational `lifecycle.log` is unchanged. See the [Debug mode reference](./skills/configure-pi-sync/references/configuration.md#debug-mode) for safe cleanup, older snapshots, and timing details.
 
@@ -193,7 +193,7 @@ Timing reports still appear in the TUI transcript or as RPC notifications withou
 
 Startup loads command and transfer implementations only when needed. When no transaction directory is pending, a local directory check skips loading the file-recovery implementation. Pending transactions still complete recovery before Pi accepts user edits; this safety barrier is not deferred.
 
-With **Automatic sync** enabled, session startup schedules a background check instead of waiting for a transfer. Pi remains usable while Git, WebDAV, R2, or S3 checks local hashes and remote metadata. Results follow the [status and review classifications](#resolve-conflicts-in-the-manager); check failures provide `/sync` guidance without opening a dialog. Use **Sync now** to start a reviewed transfer, or `/sync status` to retry a check. Foreground `/sync` cancels and drains the background check before starting.
+With **Automatic sync** enabled, session startup schedules a background check instead of waiting for a transfer. Pi remains usable while Git, WebDAV, R2, or S3 checks local hashes and remote metadata. Results follow the [status and review classifications](#resolve-conflicts-in-the-manager); check failures provide `/sync` guidance without opening a dialog. Use **Sync now** for a reviewed transfer, **View differences** for a manual read, or ask Pi to [recheck in Debug mode](#-tools). Foreground `/sync` cancels and drains the background check before starting.
 
 Checks run once per session start, including `/reload`, new, resumed, and forked sessions, in TUI and RPC only. Print/JSON skip startup checks. This one-shot policy has no polling or automatic retry loop. The overall deadline is 30 seconds, followed by underlying cleanup where needed; Git process termination and temporary-ref cleanup can take additional time. Git checks can still fetch objects and update the extension's private bare cache, but never push, apply managed files, update the sync baseline, or reload Pi.
 
@@ -236,7 +236,7 @@ Partial sync keeps each side's unresolved versions, preserves their previous acc
 With a footer that supports the [public semantic status protocol](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-statusline/docs/extension-status-protocol.md), normal standby—including another local monitoring owner—is hidden. Pi Statusline shows short static markers for checking, transfers, model resolution, and review, while retry/blocked states keep short reasons. Configured icons remain effective. Native Pi footers, RPC observers, and older or absent consumers retain the existing readable raw status; Sync needs no other extension to operate. See [Status display](./skills/configure-pi-sync/references/configuration.md#status-display) for reason labels and unchanged recovery behavior.
 
 **Settings → Skip secret scan** defaults to **Off**; enable it only after reviewing the destination and selected content because it disables push scanning for every setup.
-See [Secret scanning](./skills/configure-pi-sync/references/configuration.md#secret-scanning) for the setting and diagnostic behavior.
+See [Secret scanning](./skills/configure-pi-sync/references/configuration.md#secret-scanning) for the setting and its risks.
 
 A minimal Git setup uses an existing private remote and keeps automatic sync off:
 
@@ -297,7 +297,7 @@ A save applies to subsequent transfer attempts. It neither starts a transfer nor
 
 ### Scan limits
 
-If the agent-directory scan exceeds 64 MiB, open **Settings → Agent directory scope** to exclude large files or folders you do not need to sync. Reopen the transfer review. Storage diagnostics do not change the local scan limit.
+If the agent-directory scan exceeds 64 MiB, open **Settings → Agent directory scope** to exclude large files or folders you do not need to sync. Reopen the transfer review. A remote read does not change the local scan limit.
 
 Read the [settings reference](./skills/configure-pi-sync/references/configuration.md) for complete S3/R2, Git, and WebDAV examples, backend fields, content policy, legacy paths, and recovery steps.
 
@@ -307,7 +307,7 @@ Pi can automatically load the [configuration skill](./skills/configure-pi-sync/S
 
 The skill applies authorized edits to `pi-sync.json` through the running local daemon for routine preferences. Loading the skill does not authorize edits.
 
-Use `/sync` for initial setup, masked credential entry, and operations that require a separate review. The skill does not run backend diagnostics, check remote connectivity, or start transfers. See the [settings reference](./skills/configure-pi-sync/references/configuration.md) for manual configuration and troubleshooting.
+Use `/sync` for initial setup, masked credential entry, and operations that require a separate review. The skill uses summarized local evidence for troubleshooting. It does not start transfers or run backend commands. See the [settings reference](./skills/configure-pi-sync/references/configuration.md) for manual configuration and troubleshooting.
 
 ## 💬 Commands
 
@@ -319,16 +319,13 @@ Use `/sync` for initial setup, masked credential entry, and operations that requ
 | `/sync daemon recover` | Diagnostic fallback: review and stop the current daemon in TUI or RPC without starting a replacement or retrying a transfer. |
 | `/sync use <setup>` | Switch the active local sync setup, following its switch policy. |
 | `/sync init` | Create a local configuration template. |
-| `/sync config` | Show resolved configuration. |
 | `/sync files` | Open the current setup’s path selection or agent-directory rules in TUI. |
-| `/sync status` | Compare local and remote snapshot state. |
-| `/sync diff` | Show local and remote differences. |
+| `/sync diff` | Read current local and remote file differences without transferring files. |
 | `/sync conflicts` | Review private unresolved dependency groups and choose local or remote group versions after fresh validation. |
-| `/sync doctor` | Check configuration, connectivity, and backend safety. |
 | `/sync push` | Publish local content to remote storage. |
 | `/sync pull` | Back up local content, then apply the remote snapshot. |
 | `/sync sync` | Review and merge changes without model assistance; initial source and policy changes retain separate reviews. |
-| `/sync history` | Browse remote snapshots and review a rollback. |
+| `/sync history` | Browse remote snapshots, review a rollback in TUI, or confirm WebDAV history repair when offered. |
 | `/sync rollback <snapshot-id>` | Back up local content, apply a historical snapshot, and republish it remotely. |
 | `/sync migrate-state` | Migrate the legacy local state directory. |
 | `/sync unlock --stale` | Recover an abandoned local lock after guarded ownership checks. |
@@ -353,13 +350,26 @@ All routes support TUI and RPC; RPC settings and included-content screens are re
 Print and JSON modes reject `/sync`.
 Unknown commands or flags, trailing values, and missing setup/snapshot values are rejected, including the former version 2 setup-addressing flag.
 
-- `--setup <name>` targets a setup without switching it on `config`, `files`, `status`, `diff`, `conflicts`, `doctor`, `push`, `pull`, `sync`, `history`, and `rollback`.
+- `--setup <name>` targets a setup without switching it on `files`, `diff`, `conflicts`, `push`, `pull`, `sync`, `history`, and `rollback`.
 - `--yes` (alias: `-y`) skips confirmation on `push`, `pull`, `sync`, `rollback`, and `migrate-state`; use only after reviewing the affected content.
 - `--force` lets `push` or `pull` accept content conflicts without disabling backend concurrency protection. It is also accepted by `sync`, which still requires a direction choice for divergent content, and by `rollback` for compatibility. For legacy path policies, explicit forced directions can also resolve an interrupted merge after a fresh review, archiving its old journal instead of restoring old bytes.
 - `--stale` is accepted only by `unlock` and is required to remove a stale lock.
 
 Push and rollback publish data externally; pull and rollback can replace or delete local managed files.
 Review [Settings](#-settings) for included-content privacy and [Manager, conflicts, and recovery](#-manager-conflicts-and-recovery) before forcing a direction, skipping confirmation, or removing a lock.
+
+### Migrating from the retired check commands
+
+**Breaking change:** `/sync status`, `/sync doctor`, `/sync config`, and the **Check remote status** and **Diagnostics** menu actions are gone. Entering the old commands shows migration advice without contacting storage. Use **/sync → Settings** to review sync setups and storage connections, **View differences** or `/sync diff` to compare files, and the Debug tool below for baseline-relative checks. A read does not verify write access. For a missing WebDAV history entry, open **History** and review **Repair active snapshot history**. `/sync daemon status` still reports service status. Supported daemon peers retain their existing `status` and `doctor` operations; no settings conversion is required.
+
+## 🛠️ Tools
+
+Start Pi or use `/reload` with [Debug mode](#debug-mode) enabled in TUI or RPC to make `pi_sync_debug` available. Pi's tool allowlist still applies. The tool is not available in print or JSON. Ask Pi to explain the last sync check or request a new comparison:
+
+- `latest` reads the most recent matching summary from the last 64 KiB of the private log. The result is historical; no record does not mean sync is clean. This action never starts or contacts the daemon.
+- `recheck` asks for approval to read the configured remote and return a summary to the model. A legacy snapshot may need to be read to compare its content selection. Declining, cancelling, or having no confirmation UI makes no remote request.
+
+The tool returns bounded summaries, not raw log lines, credentials, paths, storage addresses, file contents, or raw errors. It does not publish, apply, probe writes, or repair History. Enabling the tool starts no new background checks.
 
 ## 🔄 Backend and recovery model
 
@@ -376,11 +386,11 @@ The private bare cache under `<agent-dir>/pi-sync/git/` is rebuildable.
 
 WebDAV requires HTTPS except loopback tests.
 URL credentials, query strings, fragments, unsafe redirects, weak/missing ETags, and ignored conditional headers fail closed.
-`/sync doctor` verifies collection and conditional-write behavior with an isolated probe, then repairs a missing active-snapshot history entry.
+Pi Sync verifies conditional writes before publication. If a publication activates a snapshot but leaves its History entry missing, open **/sync → History** and choose **Repair active snapshot history** when offered. Confirm the exact setup and snapshot. The repair uses a temporary write/delete probe and adds the missing entry; it does not change the active snapshot or any local files. No repair runs automatically or through the Debug tool.
 
 S3/R2 requests reject redirects, including same-origin redirects; configure the canonical endpoint before syncing. Credentials and snapshot bodies are never forwarded to a redirect destination.
 
-S3/R2 publishes `latest.json` and history using ETag `If-Match`, or `If-None-Match: *` for first creation, then verifies the active pointer. Before each publication, an isolated `.pi-sync-probes/<random-id>` object verifies that the server rejects stale ETags and create-only writes to existing objects and rotates strong ETags. Credentials must allow read, write, and delete under the selected storage path; the probe is deleted even after cancellation. Missing/weak ETags, ignored conditions, and probe or cleanup failures stop publication. A failed cleanup reports the probe key for manual removal; bucket versioning may retain probe versions. `/sync doctor` remains read-only for S3/R2 and does not verify write support.
+S3/R2 publishes `latest.json` and history using ETag `If-Match`, or `If-None-Match: *` for first creation, then verifies the active pointer. Before each publication, an isolated `.pi-sync-probes/<random-id>` object verifies that the server rejects stale ETags and create-only writes to existing objects and rotates strong ETags. Credentials must allow read, write, and delete under the selected storage path; the probe is deleted even after cancellation. Missing/weak ETags, ignored conditions, and probe or cleanup failures stop publication. A failed cleanup reports the probe key for manual removal; bucket versioning may retain probe versions.
 
 Snapshot recovery is guarded: new journals record before/after images, older journals are retired only when their unchanged preimages are provable, and unrecognized bytes remain untouched for manual review. Current-session targets are never restored during startup. Preserve a blocked transaction and its backup, close Pi, and review the private evidence before restoring selected paths; malformed/unsupported journals are not disposable. Pi may have loaded resources before lifecycle recovery, so reload or restart explicitly after recovery if loaded resources need to match the restored files.
 
@@ -470,7 +480,7 @@ Preserve both roots before manual recovery; with every Pi process closed and no 
 ## 🔒 Security and privacy
 
 - Canonical, legacy, temporary, and recovery settings paths are denied from snapshots; both `pi-sync/` and `.pisync/` state roots are permanently denied.
-- Push scans managed local content for common secret patterns unless the user explicitly enables **Skip secret scan**; `/sync doctor` always retains the diagnostic scan.
+- Push scans managed local content for common secret patterns unless the user explicitly enables **Skip secret scan**.
 - Remote snapshot references, checksums, paths, manifests, response sizes, and publication revisions are validated.
 - Symlink parents, path escapes, duplicate paths, and unsafe file/directory replacement fail before local mutation.
 - Live locks block mutation; stale recovery rechecks process and guard ownership.

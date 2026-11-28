@@ -23,9 +23,7 @@ const setupActions = [
   ["Pull from remote", "pull"],
   ["Push to remote", "push"],
   ["View differences", "diff"],
-  ["Check remote status", "status"],
   ["History", "history"],
-  ["Diagnostics", "doctor"],
   ["Review unresolved conflicts", "conflicts"],
   ["Settings", undefined],
 ] as const;

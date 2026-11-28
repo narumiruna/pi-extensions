@@ -163,11 +163,11 @@ test.each([
   [Object.assign(new Error("write failed"), { code: "EACCES" }), /write access/u],
   [new Error("WebDAV request failed (403)"), /\/sync → Settings → Manage storage connections/u],
   [new Error("Git authentication failed"), /credentials and remote permissions/u],
-  [Object.assign(new Error("Storage unavailable"), { status: 503 }), /\/sync doctor/u],
+  [Object.assign(new Error("Storage unavailable"), { status: 503 }), /provider's service status.*\/sync diff/u],
   [new Error("S3 request timed out"), /server address and network/u],
   [new Error("settings changed while review was open"), /Reopen the item/u],
   [new Error("Invalid pi-sync settings"), /repair it before retrying/u],
-  [new Error("Remote publication outcome is unknown"), /\/sync doctor or choose Diagnostics in \/sync/u],
+  [new Error("Remote publication outcome is unknown"), /\/sync → Settings.*\/sync diff/u],
 ] as const)("error guidance preserves outcome and supplies an action: %s", (error, expected) => {
   const output = syncErrorGuidance(error);
   assert.ok(output.startsWith(`${error.message}\n`));
@@ -185,9 +185,9 @@ test.each([
 ] as const)("scan limits give local recovery guidance: %s", (message, expected) => {
   const output = syncErrorGuidance(new Error(message));
   assert.ok(output.startsWith(`${message}\n`));
-  assert.match(output, /\/sync (?:config|→ Settings)/iu);
+  assert.match(output, /\/sync → Settings/u);
   assert.match(output, expected);
-  assert.doesNotMatch(output, /Check setup|Diagnostics|\/sync doctor/u);
+  assert.doesNotMatch(output, /\/sync (diff|status|doctor|config)|Diagnostics/u);
 });
 
 test("technical error details are bounded and terminal-safe", () => {

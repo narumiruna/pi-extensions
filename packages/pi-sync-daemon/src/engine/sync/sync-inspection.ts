@@ -16,6 +16,7 @@ export async function inspectSync(
   signal?: AbortSignal,
   factory: SyncBackendFactory = createSyncBackend,
   timings: StartupTimings = createStartupTimings(),
+  beforeRemote?: () => Promise<void>,
 ) {
   throwIfAborted(signal);
   const backend = await timings.measure("backend initialization", () => factory(config));
@@ -25,8 +26,10 @@ export async function inspectSync(
   );
   throwIfAborted(signal);
   const state = await timings.measure("sync state read", () => readStateForConfig(config));
+  if (beforeRemote) await beforeRemote();
   throwIfAborted(signal);
   const head = await timings.measure("remote head", () => backend.readHead(signal));
+  if (head && !head.selection && beforeRemote) await beforeRemote();
   throwIfAborted(signal);
   const selectionState = head ? await inspectHeadSelection(backend, config, head, signal) : undefined;
   throwIfAborted(signal);

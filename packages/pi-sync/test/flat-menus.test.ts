@@ -45,6 +45,9 @@ test("ordinary main exposes transfers, inspection and management actions with co
       routed = true;
     });
     assert.deepEqual(choices, [...MAIN_MENU_ACTIONS, "Done"]);
+    assert.ok(choices.includes("View differences"));
+    assert.ok(!choices.includes("Check remote status"));
+    assert.ok(!choices.includes("Diagnostics"));
     assert.match(title, /Remote status: Not checked/u);
     assert.doesNotMatch(title, /CURRENT STATE|ACTIONS ·|Scheduler|Accounting/u);
     assert.equal(routed, false);
@@ -57,9 +60,7 @@ for (const [label, expected] of [
   ["Pull from remote", "pull"],
   ["Push to remote", "push"],
   ["View differences", "diff"],
-  ["Check remote status", "status"],
   ["History", "history"],
-  ["Diagnostics", "doctor"],
 ]) {
   test(`main ${label} dispatches ${expected} with owned cancellation and no force flags`, async () => {
     await configured(async () => {
@@ -78,43 +79,6 @@ for (const [label, expected] of [
       );
       assert.deepEqual(routes, [expected]);
       assert.ok(signals[0] instanceof AbortSignal);
-    });
-  });
-}
-
-for (const outcome of ["cancel", "setup-change", "shutdown"] as const) {
-  test(`Diagnostics review ${outcome} does not run backend probes`, async () => {
-    await configured(async () => {
-      const owner = new AbortController();
-      const choices = ["Diagnostics", undefined];
-      let review = "";
-      const context = createMockContext({
-        mode: "rpc",
-        select: async () => choices.shift(),
-        confirm: async (_title: string, body: string) => {
-          review = body;
-          if (outcome === "setup-change")
-            await updateLocalConfig((settings) => ({ ...settings, skipSecretScan: true }));
-          if (outcome === "shutdown") owner.abort();
-          return outcome !== "cancel";
-        },
-      });
-      const routes: string[] = [];
-      await showSyncManager(
-        context.ctx,
-        async (route) => {
-          routes.push(route);
-        },
-        owner.signal,
-      );
-      assert.deepEqual(routes, []);
-      assert.match(review, /Setup: home/);
-      assert.match(review, /WebDAV probes conditional writes/);
-      if (outcome === "setup-change")
-        assert.ok(
-          context.notifications.some((entry) => /Setup changed during diagnostics review/u.test(entry.message)),
-        );
-      else assert.deepEqual(context.notifications, []);
     });
   });
 }
@@ -153,7 +117,7 @@ test("unresolved group review is conditional and does not replace content-list r
   });
 });
 
-test("empty content retains Settings, History and Diagnostics without transfer shortcuts", async () => {
+test("empty content retains Settings and History without transfer shortcuts", async () => {
   await configured(async () => {
     await updateLocalConfig((settings) => {
       const home = settings.syncSetups.home;
@@ -166,7 +130,7 @@ test("empty content retains Settings, History and Diagnostics without transfer s
         },
       };
     });
-    assert.deepEqual((await describeManagerState()).actions, ["Settings", "History", "Diagnostics"]);
+    assert.deepEqual((await describeManagerState()).actions, ["Settings", "History"]);
   });
 });
 
@@ -530,9 +494,10 @@ test("History cancellation cannot interrupt a rollback after its commit boundary
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
+    let operationRoute: string | undefined;
     let operationSignal: AbortSignal | undefined;
     const running = showSyncManager(context.ctx, async (route, signal, onCommit) => {
-      assert.equal(route, "history");
+      operationRoute = route;
       operationSignal = signal;
       onCommit?.();
       started();
@@ -541,9 +506,10 @@ test("History cancellation cannot interrupt a rollback after its commit boundary
     });
     try {
       await tui.waitForOpen();
-      for (let index = 0; index < 6; index++) tui.press("tui.select.down");
+      tui.press("end");
       tui.press("tui.select.confirm");
       await committed;
+      assert.equal(operationRoute, "history");
       await tui.waitForOpen();
       tui.press("ctrl+c");
       assert.equal(operationSignal?.aborted, false);

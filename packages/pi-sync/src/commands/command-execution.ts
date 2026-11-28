@@ -2,22 +2,25 @@ import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/
 import { showDaemonStatus } from "../daemon/daemon-status-ui.js";
 import { CompletedDirectionalRecoveryError } from "../daemon/directional-recovery.js";
 import { type PiDaemonClient, piDaemonClient, remoteOperation } from "../daemon/pi-client.js";
-import { loadSettingsConfig, sessionTokenWarnings, syncSessionsWarnings } from "../settings/config.js";
 import { activeLocalConfigPath, createLocalConfigDocument, localConfigPath } from "../settings/config-file.js";
 import { localConfigTemplate, readLocalConfigObject } from "../settings/settings-store.js";
-import type { AnySyncConfig } from "../settings/settings-types.js";
 import { throwIfAborted } from "../sync/signals.js";
 import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
 import { errorMessage, isSyncDecisionRequiredError, SetupPullRequiresUiError } from "../sync/sync-errors.js";
 import type { SyncLoaders } from "../sync/sync-loaders.js";
-import { RemoteSelectionMismatchError, syncSessionsSelected } from "../sync/sync-policy.js";
-import { automaticSyncSummary } from "../ui/automatic-sync-summary.js";
+import { RemoteSelectionMismatchError } from "../sync/sync-policy.js";
 import type { RunRouteResult } from "../ui/cancellable-operation.js";
 import { trackOperationDialogs } from "../ui/operation-dialogs.js";
-import { startupTransferSummary } from "../ui/sync-behavior.js";
 import { setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
-import { parseOptions, resolveSyncCommand, splitArgs, usage, validateCommandOptions } from "./command.js";
+import {
+  parseOptions,
+  resolveSyncCommand,
+  retiredSyncCommandGuidance,
+  splitArgs,
+  usage,
+  validateCommandOptions,
+} from "./command.js";
 import type { CommandOptions } from "./command-types.js";
 
 export async function executeRecoveryCommand(
@@ -83,6 +86,11 @@ export async function executeCommand(
     const command = await resolveSyncCommand(rawArgs, ctx);
     if (signal?.aborted || !command) return { kind: "completed" };
     const { subcommand, rest } = command;
+    const retired = retiredSyncCommandGuidance(subcommand);
+    if (retired) {
+      ctx.ui.notify(retired, "warning");
+      return { kind: "failed" };
+    }
     if (directionalClient && directionalFingerprint !== undefined) {
       if ((subcommand !== "push" && subcommand !== "pull") || rest.length || !setup || retryRefusal)
         throw new Error("Invalid directional action.");
@@ -146,19 +154,10 @@ export async function executeCommand(
       case "init":
         await initConfig(ctx, signal);
         return { kind: "completed" };
-      case "config":
-        await showConfig(ctx, options);
-        return { kind: "completed" };
       case "files": {
         const { showFileSelection } = await import("../ui/file-selection.js");
         throwIfAborted(options.signal);
         await showFileSelection(ctx, options.setup, options.signal);
-        return { kind: "completed" };
-      }
-      case "status": {
-        const operations = await loaders.operations();
-        throwIfAborted(options.signal);
-        await operations.status(ctx, options);
         return { kind: "completed" };
       }
       case "diff": {
@@ -171,12 +170,6 @@ export async function executeCommand(
         const { showConflicts } = await import("../sync/conflict-review.js");
         throwIfAborted(options.signal);
         await showConflicts(ctx, options);
-        return { kind: "completed" };
-      }
-      case "doctor": {
-        const operations = await loaders.operations();
-        throwIfAborted(options.signal);
-        await operations.doctor(ctx, options);
         return { kind: "completed" };
       }
       case "push": {
@@ -305,96 +298,4 @@ async function initConfig(ctx: ExtensionCommandContext, signal?: AbortSignal) {
   await createLocalConfigDocument(localConfigTemplate(), signal);
   throwIfAborted(signal);
   ctx.ui.notify(`Created ${configPath}. Add a storage connection and sync setup before syncing.`, "info");
-}
-
-async function showConfig(ctx: ExtensionCommandContext, options: CommandOptions) {
-  const config = await loadSettingsConfig(options.setup);
-  throwIfAborted(options.signal);
-  const warnings = [
-    ...(config.backend.type === "s3" ? sessionTokenWarnings(config.backend.profile) : []),
-    ...syncSessionsWarnings(config),
-  ];
-  const storageLines = configStorageLines(config);
-  ctx.ui.notify(
-    [
-      "pi-sync config:",
-      `sync setup: ${config.setupName}`,
-      `storage connection: ${config.connectionName}`,
-      ...storageLines,
-      `storage path: ${config.storagePath}`,
-      `automatic sync: ${automaticSyncSummary(config.automatic)}`,
-      `settings field merge: ${config.mergeSettings ? "On" : "Off"}`,
-      `machine-local settings.json fields: ${(config.localFields ?? []).map(safeTerminalText).join(", ") || "none"}`,
-      `startup transfer: ${startupTransferSummary(config)}`,
-      "Autonomous sync and Continuous sync are retired. Saved legacy flags have no effect.",
-      config.scope ? "sync scope: Pi agent directory" : `included content: ${config.include.join(", ") || "none"}`,
-      ...(config.scope
-        ? [
-            `excluded paths: ${config.exclude?.map(safeTerminalText).join(", ") || "none"}`,
-            `re-included paths: ${config.reinclude?.map(safeTerminalText).join(", ") || "none"}`,
-          ]
-        : []),
-      `sessions: ${syncSessionsSelected(config) ? "included" : "not included"}`,
-      `settings file: ${localConfigPath()}`,
-      ...warnings,
-    ].join("\n"),
-    warnings.length > 0 ? "warning" : "info",
-  );
-}
-
-function configStorageLines(config: AnySyncConfig) {
-  switch (config.backend.type) {
-    case "git":
-      return [
-        "kind: git",
-        `remote: ${displayGitRemote(config.backend.profile.remote)}`,
-        "authentication: existing Git/SSH credentials (not stored)",
-        `branch: ${config.backend.destination.branch}`,
-      ];
-    case "webdav":
-      return [
-        "kind: webdav",
-        `url: ${displayWebDavUrl(config.backend.profile.url, config.backend.profile.username)}`,
-        "username: configured (value hidden)",
-        "password: configured",
-      ];
-    case "s3":
-      return [
-        "kind: s3",
-        `endpoint: ${config.backend.profile.endpoint}`,
-        `bucket: ${config.backend.destination.bucket}`,
-        `region: ${config.backend.profile.region}`,
-        "access key id: configured",
-        "secret access key: configured",
-        `session token: ${config.backend.profile.sessionToken ? "configured" : "not configured"}`,
-      ];
-  }
-}
-
-function displayGitRemote(value: string | undefined) {
-  if (!value) return "missing";
-  try {
-    const url = new URL(value);
-    url.username = "";
-    url.password = "";
-    url.search = "";
-    url.hash = "";
-    return url.toString();
-  } catch {
-    return value.replace(/^(?:[^@\s]+@)?(?<host>[^:]+):.+$/u, "$<host>:…");
-  }
-}
-
-function displayWebDavUrl(value: string | undefined, username: string | undefined) {
-  if (!value) return "missing";
-  try {
-    const url = new URL(value);
-    url.username = "";
-    url.password = "";
-    url.search = "";
-    url.hash = "";
-    return username ? `${url.origin}/…` : `${url.origin}${url.pathname}`;
-  } catch {
-    return "invalid (value hidden)";
-  }
 }

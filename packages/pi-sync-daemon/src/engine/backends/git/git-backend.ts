@@ -189,7 +189,7 @@ export class GitSyncBackend implements SyncBackend {
     const observed = await this.fetchRemoteHead(options.signal);
     if (!matchesExpected(observed, expected, this.identity)) {
       throw new SyncBackendConflictError(
-        "Git remote changed while preparing publication. Run /sync status and retry.",
+        "Git remote changed while preparing publication. Review changes with /sync diff before retrying.",
         { currentHead: observed ? await this.headForSha(observed, options.signal) : undefined },
       );
     }

@@ -9,7 +9,7 @@ import { enableContinuous } from "./continuous-test-helpers.js";
 import { withTempHome } from "./helpers.js";
 import { createMergeFixture } from "./merged-sync-fixture.js";
 
-for (const route of ["sync", "sync --invalid-flag", "status", "sync --setup other"])
+for (const route of ["sync", "sync --invalid-flag", "diff", "sync --setup other"])
   test(`only validated explicit sync routes request background retry: ${route}`, async () =>
     withTempHome(async (agentDir) => {
       await createMergeFixture(agentDir);
@@ -20,7 +20,7 @@ for (const route of ["sync", "sync --invalid-flag", "status", "sync --setup othe
         loadSyncOperations: async () => ({
           ...(await import("@narumitw/pi-sync-daemon/engine/sync/sync-operations")),
           syncBoth: async () => "applied" as const,
-          status: async () => {},
+          diff: async () => {},
         }),
       });
       await handleCommand(

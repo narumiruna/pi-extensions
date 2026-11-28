@@ -533,6 +533,9 @@ async function smokeSync(daemonPID) {
   assert.ok(syncEntry);
   const syncLoader = new sdk.DefaultResourceLoader({ cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR, settingsManager: sdk.SettingsManager.inMemory({}), additionalExtensionPaths: [join(process.cwd(), syncEntry)] });
   await syncLoader.reload(); const syncLoaded = syncLoader.getExtensions(); assert.deepEqual(syncLoaded.errors, []);
+  let activeToolNames = [];
+  syncLoaded.runtime.getActiveTools = () => [...activeToolNames];
+  syncLoaded.runtime.setActiveTools = (names) => { activeToolNames = [...names]; };
   const syncExtension = syncLoaded.extensions[0]; assert.ok(syncExtension);
   const syncNotices = [];
   const syncCtx = {

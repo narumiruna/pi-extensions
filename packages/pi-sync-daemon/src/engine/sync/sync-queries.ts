@@ -2,7 +2,12 @@ import { createSyncBackend, type SyncBackendFactory } from "../backends/backend-
 import { HISTORY_PREVIEW_LIMIT, type SyncBackend } from "../backends/sync-backend.js";
 import type { CommandOptions } from "../commands/command-types.js";
 import type { EngineContext as ExtensionCommandContext } from "../host.js";
-import { loadConfig, syncSessionsWarnings } from "../settings/config.js";
+import {
+  loadConfig,
+  loadConfigForCheck,
+  syncCheckConfigFingerprint,
+  syncSessionsWarnings,
+} from "../settings/config.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import { resolvedSnapshotOptionsForContext } from "../snapshot/session-paths.js";
 import { createSnapshot, scanSnapshot } from "../snapshot/snapshot.js";
@@ -13,6 +18,7 @@ import { formatDiff, formatSnapshotOnlyDiff, publicationCapabilityDescription } 
 import { setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
 import { portableSnapshot } from "./local-fields.js";
+import { captureMutationOwner } from "./mutation-owner.js";
 import { formatRemoteSelectionStatus, readRemoteSnapshot } from "./remote-snapshot.js";
 import { throwIfAborted } from "./signals.js";
 import { errorMessage } from "./sync-errors.js";
@@ -233,53 +239,135 @@ export async function history(
   ctx: ExtensionCommandContext,
   options: CommandOptions,
   factory: SyncBackendFactory = createSyncBackend,
+  validateJob?: () => void,
 ) {
-  const config = await loadConfig(options.setup);
-  throwIfAborted(options.signal);
+  const { signal } = options;
+  const validateSession = captureMutationOwner(ctx, signal);
+  const validateOwner = () => {
+    validateJob?.();
+    validateSession();
+  };
+  validateOwner();
+  const config = await loadConfig(options.setup, signal);
+  validateOwner();
   const backend = await factory(config);
-  const snapshots = (await backend.listHistory(options.signal)).slice(-HISTORY_PREVIEW_LIMIT).reverse();
-  throwIfAborted(options.signal);
+  validateOwner();
+  const entries = await backend.listHistory(signal);
+  validateOwner();
+  const interactive = ctx.hasUI && (ctx.mode === "tui" || ctx.mode === "rpc");
+  const repair =
+    interactive && !options.auto && config.backend.type === "webdav"
+      ? backend.repairActiveHistory?.bind(backend)
+      : undefined;
+  const head = repair
+    ? await backend.readHead(signal).catch(() => {
+        validateOwner();
+        ctx.ui.notify("History repair is unavailable because the active WebDAV snapshot could not be read.", "warning");
+        return undefined;
+      })
+    : undefined;
+  validateOwner();
+  const repairHead = head && !entries.some((entry) => entry.snapshotRef === head.snapshotRef) ? head : undefined;
+  const snapshots = entries.slice(-HISTORY_PREVIEW_LIMIT).reverse();
   const lastApplied = await readStateForConfig(config)
     .then((state) => state.lastAppliedSnapshot)
     .catch(() => undefined);
-  throwIfAborted(options.signal);
+  validateOwner();
   const appliedDetails = lastApplied
     ? `Last applied snapshot ID: ${safeTerminalText(lastApplied)}\nApplication time: unavailable. Snapshot dates are creation times.`
     : "Last applied snapshot ID: unavailable.";
-  if (snapshots.length === 0) {
+  if (snapshots.length === 0 && !repairHead) {
     ctx.ui.notify(`No remote pi-sync history found.\n${appliedDetails}`, "info");
     return;
   }
 
-  const currentSnapshot = snapshots[0]?.snapshotId;
-  if (ctx.mode === "tui") {
-    const labels = snapshots.map(
-      (item, index) =>
-        `${index + 1}. ${item.createdAt} · ${safeTerminalText(item.machine)} · ${item.snapshotId}${item.snapshotId === currentSnapshot ? " (current)" : ""}${item.syncSessions ? " · sessions" : ""}`,
+  const previewRollback = interactive && ctx.mode === "tui";
+  if (!previewRollback) {
+    ctx.ui.notify(
+      [
+        appliedDetails,
+        ...snapshots.map(
+          (item) =>
+            `${safeTerminalText(item.snapshotRef)} ${safeTerminalText(item.createdAt)} ${safeTerminalText(item.machine)}`,
+        ),
+      ].join("\n"),
+      "info",
     );
-    const selected = await ctx.ui.select(
-      `History for sync setup “${safeTerminalText(config.setupName)}”\n\n${appliedDetails}\n\nChoose a snapshot to preview rollback.`,
-      [...labels, "Back"],
-      { signal: options.signal },
+    if (!repairHead) return;
+  }
+
+  const currentSnapshot = repair ? head?.snapshotId : snapshots[0]?.snapshotId;
+  const labels = previewRollback
+    ? snapshots.map(
+        (item, index) =>
+          `${index + 1}. ${safeTerminalText(item.createdAt)} · ${safeTerminalText(item.machine)} · ${safeTerminalText(item.snapshotId)}${item.snapshotId === currentSnapshot ? " (current)" : ""}${item.syncSessions ? " · sessions" : ""}`,
+      )
+    : [];
+  const setupName = safeTerminalText(config.setupName);
+  const repairChoice = "Repair active snapshot history";
+  const selected = await ctx.ui.select(
+    [
+      `History for sync setup “${setupName}”`,
+      appliedDetails,
+      ...(labels.length > 0 ? ["Choose a snapshot to preview rollback."] : []),
+      ...(repairHead ? ["The active WebDAV snapshot is missing from History."] : []),
+    ].join("\n\n"),
+    [...labels, ...(repairHead ? [repairChoice] : []), "Back"],
+    { signal },
+  );
+  validateOwner();
+  if (!selected || selected === "Back") return;
+  if (selected === repairChoice && repairHead && repair) {
+    const validateRepairOwner = () => {
+      validateOwner();
+      if (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc"))
+        throw new Error("History repair no longer has an observable TUI or RPC client.");
+    };
+    validateRepairOwner();
+    const fingerprint = syncCheckConfigFingerprint(config);
+    const confirmed = await ctx.ui.confirm(
+      "Repair active WebDAV snapshot history?",
+      [
+        `Setup: ${setupName}`,
+        `Storage: ${safeTerminalText(backend.destination)}`,
+        `Active snapshot: ${safeTerminalText(repairHead.snapshotId)}`,
+        "This runs a temporary conditional write/delete probe, then adds this snapshot to remote History if it is still missing. If History is full, the oldest entry is dropped. The active snapshot and local files do not change.",
+      ].join("\n"),
+      { signal },
     );
-    if (!selected || selected === "Back") return;
-    throwIfAborted(options.signal);
-    const index = labels.indexOf(selected);
-    const snapshot = snapshots[index];
-    if (!snapshot) return;
-    await withLock("rollback", () =>
-      rollback(ctx, { ...options, args: [snapshot.snapshotRef], yes: false }, factory, {
-        backendIdentity: backend.identity,
-        setup: config.setupName,
-      }),
+    validateRepairOwner();
+    if (!confirmed) return;
+    const validateSettings = async () => {
+      validateRepairOwner();
+      const current = await loadConfigForCheck(options.setup, signal);
+      validateRepairOwner();
+      if (syncCheckConfigFingerprint(current) !== fingerprint)
+        throw new Error("The sync setup settings changed. Reopen History before repairing it.");
+    };
+    const repaired = await withLock("history repair", async () => {
+      await validateSettings();
+      validateRepairOwner();
+      return repair(repairHead, {
+        signal,
+        validateOwner: validateRepairOwner,
+        validateSettings,
+        onCommit: options.onCommit,
+      });
+    });
+    validateRepairOwner();
+    ctx.ui.notify(
+      repaired ? "Active WebDAV snapshot added to History." : "The active WebDAV snapshot is already in History.",
+      "info",
     );
     return;
   }
-  ctx.ui.notify(
-    [
-      appliedDetails,
-      ...snapshots.map((item) => `${item.snapshotRef} ${item.createdAt} ${safeTerminalText(item.machine)}`),
-    ].join("\n"),
-    "info",
-  );
+  const snapshot = snapshots[labels.indexOf(selected)];
+  if (!snapshot) return;
+  await withLock("rollback", () => {
+    validateOwner();
+    return rollback(ctx, { ...options, args: [snapshot.snapshotRef], yes: false }, factory, {
+      backendIdentity: backend.identity,
+      setup: config.setupName,
+    });
+  });
 }

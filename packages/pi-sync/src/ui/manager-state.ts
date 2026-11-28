@@ -28,10 +28,8 @@ export const MAIN_MENU_ACTIONS = [
   "Pull from remote",
   "Push to remote",
   "View differences",
-  "Check remote status",
   "Settings",
   "History",
-  "Diagnostics",
 ] as const;
 
 export interface ManagerDescription {
@@ -226,7 +224,6 @@ function operationActions(
         "Settings",
         ...(canSwitch ? ["Switch sync setup"] : []),
         "History",
-        "Diagnostics",
       ]
     : mainActions;
 }

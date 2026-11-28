@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   diff,
   doctor,
@@ -13,13 +12,12 @@ import {
   syncBoth,
 } from "@narumitw/pi-sync-daemon/engine/sync/sync-operations";
 import { test } from "vitest";
-import { createMockContext, createMockPi } from "../../../test/support.js";
+import { createMockContext } from "../../../test/support.js";
 import type { ResolvedGitBackend } from "../src/backends/backend-types.js";
 import { GitSyncBackend } from "../src/backends/git/git-backend.js";
 import type { CommandOptions } from "../src/commands/command-types.js";
 import { localConfigPath } from "../src/settings/config-file.js";
-import syncExtension from "../src/sync.js";
-import { runRegisteredCommand } from "./daemon-test-helpers.js";
+import { showSyncManager } from "../src/ui/manager-ui.js";
 import { createBareRemote } from "./git-test-helpers.js";
 import { withEnv, withTempHome } from "./helpers.js";
 
@@ -115,13 +113,19 @@ test("Git target supports bidirectional sync and historical rollback", () =>
     assert.notEqual((await backend.readHead())?.snapshotRef, first.snapshotRef);
   }));
 
-test("registered Git config ignores deprecated environment settings", () =>
-  withGitRoutes(async ({ ctx, notifications }) => {
-    const mock = createMockPi();
-    syncExtension(mock.pi);
-    await runRegisteredCommand(mock, ctx as ExtensionCommandContext, "config");
-    const output = notifications.at(-1)?.message ?? "";
-    assert.match(output, /kind: git/);
-    assert.match(output, /branch: pi-sync\/home/);
-    assert.doesNotMatch(output, /password|accessKeyId|secretAccessKey|PI_SYNC_|ignored-access|ignored-secret/i);
+test("Git setup review shows the branch without deprecated environment credentials", () =>
+  withGitRoutes(async () => {
+    const frames: string[] = [];
+    const choices = ["Settings", "Manage sync setups", "home (current)"];
+    const { ctx, notifications } = createMockContext({
+      mode: "rpc",
+      select: async (title: string) => {
+        frames.push(title);
+        return choices.shift();
+      },
+    });
+    await showSyncManager(ctx, async () => assert.fail("Settings review must not dispatch a command"));
+    const output = [...frames, ...notifications.map(({ message }) => message)].join("\n");
+    assert.match(output, /Storage location: Git · pi-sync\/home:pi-sync\/home/u);
+    assert.doesNotMatch(output, /password|accessKeyId|secretAccessKey|PI_SYNC_|ignored-access|ignored-secret/iu);
   }));

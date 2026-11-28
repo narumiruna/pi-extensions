@@ -13,7 +13,7 @@ import { v3S3Settings, v3WebDavSettings, withTempHome } from "./helpers.js";
 import { S3ProbeHarness } from "./s3-probe-harness.js";
 import { deferred, observeCheckCompletion } from "./startup-check-helpers.js";
 
-async function pendingStatus(event: "session_start" | "session_shutdown", webdav = false) {
+async function pendingDiff(event: "session_start" | "session_shutdown", webdav = false) {
   await withTempHome(async (agentDir) => {
     const entered = deferred();
     const disconnected = deferred();
@@ -44,7 +44,7 @@ async function pendingStatus(event: "session_start" | "session_shutdown", webdav
     let operation: Promise<unknown> | undefined;
     try {
       await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-      operation = Promise.resolve(mock.commands.get("sync")?.handler("status", context.ctx));
+      operation = Promise.resolve(mock.commands.get("sync")?.handler("diff", context.ctx));
       void operation.catch(() => {});
       await entered.promise;
       await mock.events.get(event)?.[0]?.(
@@ -66,10 +66,10 @@ async function pendingStatus(event: "session_start" | "session_shutdown", webdav
     }
   });
 }
-test("session replacement aborts an actual in-flight S3 backend operation", () => pendingStatus("session_start"));
-test("session shutdown aborts an actual in-flight S3 backend operation", () => pendingStatus("session_shutdown"));
+test("session replacement aborts an actual in-flight S3 backend operation", () => pendingDiff("session_start"));
+test("session shutdown aborts an actual in-flight S3 backend operation", () => pendingDiff("session_shutdown"));
 test("session replacement aborts an actual in-flight WebDAV backend operation", () =>
-  pendingStatus("session_start", true));
+  pendingDiff("session_start", true));
 
 test("WebDAV lifecycle ignores deprecated S3 auto-sync environment overrides", () =>
   withTempHome(async (agentDir) => {

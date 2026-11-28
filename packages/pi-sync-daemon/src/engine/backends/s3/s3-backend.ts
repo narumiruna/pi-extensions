@@ -199,7 +199,7 @@ export class S3SyncBackend implements SyncBackend {
     }
     if (!samePointer(verifiedPointer, pointer)) {
       throw new SyncBackendConflictError(
-        "Remote latest changed immediately after push. Run /sync status before continuing.",
+        "Remote latest changed immediately after push. Review changes with /sync diff before continuing.",
         {
           phase: "after-commit",
           currentHead: remoteHead(verifiedPointer, this.identity, verifiedObject.etag),
@@ -296,7 +296,7 @@ export class S3SyncBackend implements SyncBackend {
       await this.updateHistory(client, pointer);
       return undefined;
     } catch (error) {
-      return `Remote snapshot is active, but history could not be updated: ${errorMessage(error)}. Run /sync doctor before relying on history.`;
+      return `Remote snapshot is active, but history could not be updated: ${errorMessage(error)}. History may not list this publication. Use /sync diff to review the active snapshot before transferring again.`;
     }
   }
 

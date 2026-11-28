@@ -139,18 +139,23 @@ test("skill separates authorized local changes from read-only troubleshooting an
     "proceed only if it returns an owner with `needsUpgrade: false`",
     "A schema-valid change is not proof of user review or consent, even in a legacy-only setup",
     "Keep settings, daemon payloads, and other private evidence in the local process",
-    "`<getAgentDir()>/pi-sync.log` (normally `~/.pi/agent/pi-sync.log`)",
-    "Read only a bounded tail of an existing private regular file",
+    "use `pi_sync_debug` with `latest` if the tool is available",
+    "without contacting the daemon",
     "never raw log lines",
+    "use `pi_sync_debug` with `recheck` only when available",
+    "If it is unavailable or the user declines, do not use another tool to make the read",
     "do not enable Debug mode or start a transfer just to collect evidence",
     "Leave operations that Pi Sync requires the user to review in `/sync`",
-    "Do not start sync, run `/sync doctor` or backend/network commands",
+    "Do not start sync, run backend/network commands",
+    "Leave any WebDAV history repair to the user in **/sync → History**",
   ]) {
     assert.ok(skillText.includes(contract), `missing skill contract: ${contract}`);
   }
   assert.match(reference, /Agent directory changed or has an unsafe filesystem layout/u);
   assert.match(reference, /this error alone does not identify a path or field/u);
-  assert.match(reference, /WebDAV retains its isolated conditional-write\/cleanup probe and repair/u);
+  assert.match(reference, /Repair active snapshot history.*isolated conditional-write probe and cleans it up/u);
+  assert.doesNotMatch(skillText, /\/sync (doctor|status)/u);
+  assert.doesNotMatch(reference, /\/sync (doctor|status)/u);
 });
 
 test("documentation fragments accept headings and explicit anchors outside fenced code", () => {

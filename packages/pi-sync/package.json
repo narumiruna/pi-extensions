@@ -54,18 +54,21 @@
     "semver": "^7.8.6"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "1.6.0",
     "@earendil-works/pi-coding-agent": "1.6.0",
     "@earendil-works/pi-tui": "1.6.0",
     "@narumitw/pi-sync-daemon": "^0.14.1",
     "@types/proper-lockfile": "^4.1.4",
     "@types/semver": "^7.8.0",
     "esbuild": "0.28.2",
+    "typebox": "1.4.7",
     "typescript": "7.0.2"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": ">=1.1.0",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
   },
   "repository": {
     "type": "git",

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { type ExtensionCommandContext, initTheme, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import { type Component, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, StdinBuffer, visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { createMockContext } from "../../../test/support.js";
@@ -17,10 +17,8 @@ const ordinaryActions = [
   { label: "Pull from remote", route: "pull", description: "Remote → this device; replaces conflicting local files." },
   { label: "Push to remote", route: "push", description: "This device → remote; replaces conflicting remote files." },
   { label: "View differences", route: "diff", description: "Inspect changes; no transfer." },
-  { label: "Check remote status", route: "status", description: "Check remote; no transfer." },
   { label: "Settings", route: undefined, description: "Edit settings, setups, and storage connections." },
-  { label: "History", route: "history", description: "Review snapshots and rollback." },
-  { label: "Diagnostics", route: "doctor", description: "Review backend diagnostics." },
+  { label: "History", route: "history", description: "Review snapshots and recovery options." },
 ] as const;
 
 const pasteStart = "\u001b[200~";
@@ -36,10 +34,19 @@ type RouteCall = {
   retry?: boolean;
 };
 
-async function configured(run: () => Promise<void>) {
+async function configured(run: () => Promise<void>, alternateSetup = false) {
   await withTempHome(async (agentDir) => {
     mkdirSync(agentDir, { recursive: true });
-    writeFileSync(localConfigPath(), JSON.stringify(v3S3Settings()), { mode: 0o600 });
+    const settings = v3S3Settings();
+    if (alternateSetup) {
+      Object.assign(settings.syncSetups, {
+        work: {
+          ...settings.syncSetups.home,
+          storage: { ...settings.syncSetups.home.storage, path: "pi-sync/work" },
+        },
+      });
+    }
+    writeFileSync(localConfigPath(), JSON.stringify(settings), { mode: 0o600 });
     const before = readFileSync(localConfigPath());
     await run();
     assert.deepEqual(readFileSync(localConfigPath()), before);
@@ -59,6 +66,7 @@ async function withPalette(
     component(): CustomComponent;
   }) => Promise<void>,
   keybindings?: Pick<KeybindingsManager, "matches" | "getKeys">,
+  alternateSetup = false,
 ) {
   await configured(async () => {
     const tui = createTuiHarness({ width: 80, rows: 28, keybindings });
@@ -114,21 +122,13 @@ async function withPalette(
       tui.dispose();
       await running;
     }
-  });
+  }, alternateSetup);
 }
 
 function selectedLabel(frame: readonly string[]) {
   return frame
     .find((line) => line.startsWith("→ "))
     ?.slice(2)
-    .trimEnd();
-}
-
-function searchQuery(frame: readonly string[]) {
-  return frame
-    .map(stripTerminalSequences)
-    .find((line) => line.startsWith("Search: > "))
-    ?.slice("Search: > ".length)
     .trimEnd();
 }
 
@@ -162,48 +162,50 @@ function deferred<Value>() {
   return { promise, resolve };
 }
 
-test("TUI palette shows five label-only choices and only the selected description in a stable normal frame", async () => {
+test("TUI manager shows all six standard choices without search and keeps the frame stable", async () => {
   await withPalette(async ({ tui, routes }) => {
     const frames: Array<readonly string[]> = [];
     for (const action of ordinaryActions) {
       const frame = tui.render();
       frames.push(frame);
       assertSelectedDescription(frame, action.label);
-      assert.equal(choiceRows(frame).length, 5, frame.join("\n"));
+      assert.equal(choiceRows(frame).length, ordinaryActions.length, frame.join("\n"));
       assert.equal(frame[0], "─".repeat(80));
       assert.equal(frame.at(-1), "─".repeat(80));
       assert.ok(frame.length <= 25);
       assert.ok(frame.every((line) => visibleWidth(line) <= 80));
-      assert.match(frame.join("\n"), /Search:.*\n8 choices/u);
+      assert.doesNotMatch(frame.join("\n"), /Search:/u);
       tui.press("tui.select.down");
     }
     assert.equal(new Set(frames.map((frame) => frame.length)).size, 1, "navigation must not resize the normal frame");
     assert.equal(selectedLabel(tui.render()), "Sync…");
-    assert.equal(tui.isFocusable, true);
-    tui.setFocused(true);
-    assert.equal(tui.focused, true);
-    tui.setFocused(false);
-    assert.equal(tui.focused, false);
+    assert.equal(tui.isFocusable, false, "no focused text entry");
     assert.deepEqual(routes, []);
   });
 });
 
+test("an extra setup adds a reachable scrolling action without enabling search", async () => {
+  await withPalette(
+    async ({ tui, routes }) => {
+      assert.equal(choiceRows(tui.render()).length, ordinaryActions.length);
+      assert.ok(!tui.render().some((line) => line.includes("Switch sync setup")));
+      tui.press("end");
+      const frame = tui.render();
+      assert.equal(selectedLabel(frame), "Switch sync setup");
+      assert.doesNotMatch(frame.join("\n"), /Search:/u);
+      assert.deepEqual(routes, []);
+    },
+    undefined,
+    true,
+  );
+});
+
 for (const action of ordinaryActions) {
   if (!action.route) continue;
-  test(`TUI search activates ${action.label} through the existing ${action.route} handler`, async () => {
+  test(`TUI navigation activates ${action.label} through the existing ${action.route} handler`, async () => {
     await withPalette(async ({ tui, routeStarted, completeRoute, routes, confirmations }) => {
-      tui.type(action.description);
+      for (let step = 0; step < ordinaryActions.indexOf(action); step++) tui.press("tui.select.down");
       assertSelectedDescription(tui.render(), action.label);
-      // Fuzzy search can retain other matches; it must keep the intended action selected.
-      assert.ok(choiceRows(tui.render()).length <= 5);
-      tui.send("\u0015");
-      // Keep the compatibility spelling searchable even though the TUI label is compact.
-      const query = "rpcLabel" in action ? action.rpcLabel : action.label;
-      tui.type(query);
-      const searched = tui.render();
-      assertSelectedDescription(searched, action.label);
-      assert.equal(choiceRows(searched).length, 1);
-      assert.match(searched.join("\n"), /1 of 8 choices/u);
       assert.deepEqual(routes, []);
       tui.press("tui.select.confirm");
       const call = await routeStarted;
@@ -217,55 +219,45 @@ for (const action of ordinaryActions) {
         typeof call.onCommit,
         ["sync", "pull", "push", "history"].includes(action.route) ? "function" : "undefined",
       );
-      if (action.route === "doctor") {
-        assert.equal(confirmations.length, 1);
-        assert.equal(confirmations[0]?.title, "Run diagnostics?");
-        assert.match(confirmations[0]?.body ?? "", /Setup: home/u);
-        assert.ok(confirmations[0]?.signal instanceof AbortSignal);
-      } else assert.deepEqual(confirmations, []);
+      assert.deepEqual(confirmations, []);
       completeRoute({ kind: "completed", outcome: "cancelled" });
       await tui.waitForPending();
       await tui.waitForOpen();
       const returned = tui.render();
       assertSelectedDescription(returned, action.label);
-      assert.equal(searchQuery(returned), query);
+      assert.doesNotMatch(returned.join("\n"), /Search:/u);
       assert.equal(routes.length, 1);
     });
   });
 }
 
-test("searched Settings opens its existing screen and returns to the same palette choice without writing", async () => {
+test("Settings keeps its own search and returns to the same main-menu choice without writing", async () => {
   await withPalette(async ({ tui, routes }) => {
-    tui.type("storage connections");
-    assertSelectedDescription(tui.render(), "Settings");
-    tui.send("\u0015");
-    tui.type("Settings");
+    tui.press("end");
+    tui.press("tui.select.up");
     assertSelectedDescription(tui.render(), "Settings");
     tui.press("tui.select.confirm");
     await tui.waitForOpen();
     const settings = tui.render();
     assert.ok(settings.includes("Pi Sync Settings"), settings.join("\n"));
+    assert.match(settings.join("\n"), /Type to search/u);
     tui.press("tui.select.cancel");
     await tui.waitForPending();
     await tui.waitForOpen();
     assertSelectedDescription(tui.render(), "Settings");
-    assert.equal(searchQuery(tui.render()), "Settings");
+    assert.doesNotMatch(tui.render().join("\n"), /Search:/u);
     assert.deepEqual(routes, []);
   });
 });
 
-test("search includes ordinary descriptions and keeps native Backspace and query recovery", async () => {
+test("typing in the main menu does not filter, move, or activate a choice", async () => {
   await withPalette(async ({ tui, routes }) => {
-    tui.type("both sides");
-    assertSelectedDescription(tui.render(), "Sync…");
-    assert.match(tui.render().join("\n"), /1 of 8 choices/u);
-    tui.type("z");
-    assert.match(tui.render().join("\n"), /No matching choices; edit search/u);
-    tui.send("\u007f");
-    assertSelectedDescription(tui.render(), "Sync…");
-    tui.send("\u0015");
-    assert.equal(choiceRows(tui.render()).length, 5);
-    assert.match(tui.render().join("\n"), /8 choices/u);
+    tui.press("tui.select.down");
+    const frame = tui.render();
+    for (const input of ["History", "storage connections", "Check remote status", "Diagnostics", "\u007f"]) {
+      tui.type(input);
+      assert.deepEqual(tui.render(), frame);
+    }
     assert.deepEqual(routes, []);
   });
 });
@@ -273,44 +265,44 @@ test("search includes ordinary descriptions and keeps native Backspace and query
 for (const chunked of [false, true]) {
   test(`${chunked ? "multi-chunk" : "single-chunk"} bracketed paste never activates navigation, confirm or cancel keys`, async () => {
     await withPalette(async ({ tui, routes, confirmations }) => {
-      const chunks = chunked
-        ? [pasteStart, "x", "q", "j", "k", "\r", "\u0003", "\u001b[20", "1~"]
-        : [`${pasteStart}xqjk\r\u0003${pasteEnd}`];
-      for (const chunk of chunks) {
-        tui.send(chunk);
-        assert.equal(tui.isOpen, true, JSON.stringify(chunk));
+      const buffer = new StdinBuffer();
+      buffer.on("data", (data) => tui.send(data));
+      buffer.on("paste", (data) => tui.send(`${pasteStart}${data}${pasteEnd}`));
+      const initial = tui.render();
+      try {
+        const chunks = chunked
+          ? [pasteStart, "x", "q", "j", "k", "\r", "\u0003", "\u001b[20", "1~"]
+          : [`${pasteStart}xqjk\r\u0003${pasteEnd}`];
+        for (const chunk of chunks) buffer.process(chunk);
+        assert.equal(tui.isOpen, true);
         assert.equal(tui.openCount, 1);
+        assert.deepEqual(tui.render(), initial);
         assert.deepEqual(routes, []);
         assert.deepEqual(confirmations, []);
+        buffer.process("j");
+        assertSelectedDescription(tui.render(), "Pull from remote");
+      } finally {
+        buffer.destroy();
       }
-      const pasted = tui.render();
-      assert.equal(searchQuery(pasted), "xqjk");
-      assert.match(pasted.join("\n"), /0 of 8 choices/u);
-      assert.match(pasted.join("\n"), /No matching choices; edit search/u);
-      tui.send("\u0015");
-      tui.send(`${pasteStart}View differences${pasteEnd}`);
-      assertSelectedDescription(tui.render(), "View differences");
-      assert.deepEqual(routes, []);
     }, remappedKeys());
   });
 }
 
 for (const remapped of [false, true]) {
-  test(`cancelled read-only check retains search and selection with ${remapped ? "remapped" : "default"} keys`, async () => {
+  test(`cancelled read-only check retains selection with ${remapped ? "remapped" : "default"} keys`, async () => {
     await withPalette(
       async ({ tui, routeStarted, completeRoute, routes }) => {
-        tui.send(`${pasteStart}no transfer${pasteEnd}`);
-        for (let index = 0; index < 2 && selectedLabel(tui.render()) !== "Check remote status"; index += 1) {
+        for (let step = 0; step < 3; step++) {
           if (remapped) tui.send("j");
           else tui.press("tui.select.down");
         }
-        assertSelectedDescription(tui.render(), "Check remote status");
+        assertSelectedDescription(tui.render(), "View differences");
         if (remapped) tui.send("x");
         else tui.press("tui.select.confirm");
         const call = await routeStarted;
         await tui.waitForOpen();
-        assert.equal(call.route, "status");
-        assert.match(tui.render().join("\n"), /Checking remote status/u);
+        assert.equal(call.route, "diff");
+        assert.match(tui.render().join("\n"), /Comparing local and remote/u);
         if (remapped) tui.send("q");
         else tui.press("tui.select.cancel");
         assert.equal(call.signal?.aborted, true);
@@ -318,9 +310,8 @@ for (const remapped of [false, true]) {
         await tui.waitForPending();
         await tui.waitForOpen();
         const returned = tui.render();
-        assertSelectedDescription(returned, "Check remote status");
-        assert.equal(searchQuery(returned), "no transfer");
-        assert.match(returned.join("\n"), /2 of 8 choices/u);
+        assertSelectedDescription(returned, "View differences");
+        assert.equal(choiceRows(returned).length, ordinaryActions.length);
         assert.equal(routes.length, 1);
       },
       remapped ? remappedKeys() : undefined,
@@ -331,7 +322,7 @@ for (const remapped of [false, true]) {
 for (const reason of ["remapped Back", "hard Ctrl+C", "session replacement", "disposal"] as const) {
   test(`${reason} releases an in-flight directional action without starting a second route`, async () => {
     await withPalette(async ({ tui, owner, running, routeStarted, completeRoute, routes, confirmations }) => {
-      tui.type("Pull from remote");
+      tui.send("j");
       tui.send("x");
       const call = await routeStarted;
       await tui.waitForOpen();
@@ -359,7 +350,7 @@ for (const reason of ["remapped Back", "hard Ctrl+C", "session replacement", "di
   });
 }
 
-test("short palette keeps the active setup visible while navigating, searching and closing", async () => {
+test("short menu keeps the active setup visible while navigating and closing", async () => {
   await withPalette(async ({ tui, running, routes }) => {
     let frame = tui.resize({ width: 36, rows: 16 });
     assert.ok(frame.includes("Manage sync · home"), frame.join("\n"));
@@ -371,11 +362,9 @@ test("short palette keeps the active setup visible while navigating, searching a
     assert.equal(selectedLabel(frame), "Push to remote");
     assert.ok(frame.length <= 13);
     assert.ok(frame.every((line) => visibleWidth(line) <= 36));
-    tui.type("no transferzz");
-    assert.match(tui.render().join("\n"), /No matching choices; edit search/u);
-    tui.send("\u007f");
-    tui.send("\u007f");
+    tui.press("tui.select.down");
     assertSelectedDescription(tui.render(), "View differences");
+    assert.doesNotMatch(tui.render().join("\n"), /Search:/u);
     tui.press("tui.select.cancel");
     await running;
     assert.equal(tui.isOpen, false);
@@ -386,7 +375,7 @@ test("short palette keeps the active setup visible while navigating, searching a
 test("palette retains its selected row across normal, narrow, short and zero-width rendering", async () => {
   await withPalette(async ({ tui, component, routes }) => {
     tui.press("end");
-    assertSelectedDescription(tui.render(), "Diagnostics");
+    assertSelectedDescription(tui.render(), "History");
     for (const rows of [28, 12, 8, 6, 4]) {
       for (const width of [80, 20, 5, 1]) {
         const frame = tui.resize({ width, rows });
@@ -413,20 +402,20 @@ test("palette retains its selected row across normal, narrow, short and zero-wid
     }
     tui.resize({ width: 80, rows: 28 });
     tui.invalidate();
-    assertSelectedDescription(tui.render(), "Diagnostics");
-    assert.equal(choiceRows(tui.render()).length, 5);
+    assertSelectedDescription(tui.render(), "History");
+    assert.equal(choiceRows(tui.render()).length, ordinaryActions.length);
     assert.deepEqual(routes, []);
   });
 });
 
 for (const cancel of ["remapped Back", "hard Ctrl+C"] as const) {
-  test(`${cancel} closes the searched palette under non-default keybindings without routing`, async () => {
+  test(`${cancel} closes the main menu under non-default keybindings without routing`, async () => {
     await withPalette(async ({ tui, running, routes, notifications }) => {
       tui.send("j");
       assertSelectedDescription(tui.render(), "Pull from remote");
       tui.send("k");
       assertSelectedDescription(tui.render(), "Sync…");
-      tui.send(`${pasteStart}History${pasteEnd}`);
+      tui.press("end");
       const frame = tui.render();
       assertSelectedDescription(frame, "History");
       assert.match(frame.join("\n"), /k\/j navigate.*x select.*q close/u);
@@ -441,16 +430,15 @@ for (const cancel of ["remapped Back", "hard Ctrl+C"] as const) {
 }
 
 for (const reason of ["session replacement", "shutdown", "disposal"] as const) {
-  test(`palette ${reason} disposes pending search input without activating a route`, async () => {
+  test(`palette ${reason} ignores stale input without activating a route`, async () => {
     await withPalette(async ({ tui, owner, running, component, routes, notifications }) => {
-      tui.type("History");
+      tui.press("end");
       const stale = component();
       assertSelectedDescription(tui.render(), "History");
-      tui.send(`${pasteStart}unfinished`);
       if (reason === "disposal") tui.dispose();
       else owner.abort(new DOMException(reason, "AbortError"));
       await running;
-      stale.handleInput?.(`${pasteEnd}\r`);
+      stale.handleInput?.(`${pasteStart}History${pasteEnd}`);
       stale.handleInput?.("\r");
       stale.dispose?.();
       assert.equal(tui.isOpen, false);

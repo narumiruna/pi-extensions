@@ -10,12 +10,9 @@ export const SYNC_COMMANDS = [
   { name: "help", description: "Show command usage" },
   { name: "use", description: "Switch the current sync setup", usageSuffix: " <setup>" },
   { name: "init", description: "Create local config template" },
-  { name: "config", description: "Show resolved configuration" },
   { name: "files", description: "Choose included content" },
-  { name: "status", description: "Show sync status" },
   { name: "diff", description: "Show local/remote diff" },
   { name: "conflicts", description: "Review private unresolved conflict groups" },
-  { name: "doctor", description: "Check config, secrets, and lock state" },
   {
     name: "daemon",
     description: "Review service handover and unattended permission",
@@ -48,12 +45,9 @@ const SETUP_FLAG_COMPLETION = {
   description: "Address a sync setup without switching",
 } as const;
 const SYNC_FLAG_COMPLETIONS: Record<string, readonly CommandArgumentCompletion[]> = {
-  config: [SETUP_FLAG_COMPLETION],
   files: [SETUP_FLAG_COMPLETION],
-  status: [SETUP_FLAG_COMPLETION],
   diff: [SETUP_FLAG_COMPLETION],
   conflicts: [SETUP_FLAG_COMPLETION],
-  doctor: [SETUP_FLAG_COMPLETION],
   push: [
     ...YES_FLAG_COMPLETIONS,
     { value: "--force", label: "--force", description: "Overwrite visible remote changes" },
@@ -74,6 +68,10 @@ const SYNC_FLAG_COMPLETIONS: Record<string, readonly CommandArgumentCompletion[]
   "migrate-state": YES_FLAG_COMPLETIONS,
   unlock: [{ value: "--stale", label: "--stale", description: "Remove only a stale lock" }],
 };
+
+function syncFlagCompletions(command: string) {
+  return Object.hasOwn(SYNC_FLAG_COMPLETIONS, command) ? SYNC_FLAG_COMPLETIONS[command] : undefined;
+}
 
 export function splitArgs(input: string) {
   return input.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((arg) => arg.replace(/^['"]|['"]$/g, "")) ?? [];
@@ -112,21 +110,21 @@ export function parseOptions(args: string[]): CommandOptions {
   };
 }
 
+export function retiredSyncCommandGuidance(command: string | undefined): string | undefined {
+  if (command === "status") {
+    return "/sync status was retired. Use /sync diff to view file differences, or ask Pi to recheck the current setup in Debug mode.";
+  }
+  if (command === "doctor") {
+    return "/sync doctor was retired. Open /sync → Settings to review the setup, use /sync diff to check file differences, or open /sync → History for WebDAV history recovery.";
+  }
+  if (command === "config") {
+    return "/sync config was retired. Open /sync → Settings to review sync setups and storage connections.";
+  }
+  return undefined;
+}
+
 export function validateCommandOptions(command: string, options: CommandOptions) {
-  const setupAllowed = new Set([
-    "config",
-    "files",
-    "status",
-    "diff",
-    "conflicts",
-    "doctor",
-    "push",
-    "pull",
-    "sync",
-    "history",
-    "rollback",
-  ]);
-  if (options.setup && !setupAllowed.has(command)) {
+  if (options.setup && !syncFlagCompletions(command)?.includes(SETUP_FLAG_COMPLETION)) {
     throw new Error(`--setup is not supported by /sync ${command}.`);
   }
   if (options.yes && !["push", "pull", "sync", "rollback", "migrate-state"].includes(command)) {
@@ -182,14 +180,17 @@ export function completeSyncArguments(argumentPrefix: string): CommandArgumentCo
       ? matches.map((action) => ({ value: `${base}${action}`, label: action, description: "Daemon control" }))
       : null;
   }
+  const flagCompletions = syncFlagCompletions(command);
+  if (!flagCompletions) return null;
   const setupFlagIndex = args.lastIndexOf("--setup");
-  if (setupFlagIndex >= 0 && setupFlagIndex === args.length - (trailingSpace ? 1 : 2)) {
+  if (
+    flagCompletions.includes(SETUP_FLAG_COMPLETION) &&
+    setupFlagIndex >= 0 &&
+    setupFlagIndex === args.length - (trailingSpace ? 1 : 2)
+  ) {
     const currentSetup = trailingSpace ? "" : (args.at(-1) ?? "");
     if (!currentSetup.startsWith("-")) return completeSetupValue(prefix, currentSetup);
   }
-
-  const flagCompletions = SYNC_FLAG_COMPLETIONS[command];
-  if (!flagCompletions) return null;
 
   const completedArgs = trailingSpace ? args : args.slice(0, -1);
   const completedValues = completedArgs.filter((arg) => !arg.startsWith("-"));
@@ -256,12 +257,13 @@ export function usage() {
     "Usage: /sync <command>",
     `Commands: ${commands}`,
     "In the /sync manager, Push to remote and Pull from remote use the chosen source and preserve a restore point without a second confirmation. Direct commands retain their existing review and flags.",
-    "Daemon diagnostics: /sync daemon recover reviews and stops the existing daemon. It does not start a replacement or retry a transfer.",
+    "To review file differences without transferring files, use /sync diff. For check summaries or a confirmed recheck, start or /reload Pi with Debug mode enabled and ask Pi to use pi_sync_debug.",
+    "Daemon diagnostics: /sync daemon status shows service status. /sync daemon recover reviews and stops the existing daemon without starting a replacement or retrying a transfer.",
     `Automatic sync: ${AUTOMATIC_SYNC_DESCRIPTION}`,
     `Startup transfer: ${STARTUP_TRANSFER_DESCRIPTION}`,
     "Automatic transfer at startup is a separate opt-in: one conflict-free established-baseline transfer at idle in TUI/RPC, with conditional/lease publication and no resource reload.",
     "Autonomous sync and Continuous sync are retired. Saved flags no longer transfer files or call a model. Use Sync now to review a transfer or enable Startup transfer for one eligible startup sync.",
     "New after-exit grants are not supported. Use /sync daemon revoke-after-exit to clear a retained grant.",
-    "Settings: use /sync init or edit storage connections and sync setups in ~/.pi/agent/pi-sync.json (or the configured Pi agent directory). Version 1 and version 2 settings are unsupported and are never rewritten.",
+    "Settings: open /sync → Settings to review sync setups and storage connections. Use /sync init or edit pi-sync.json in the Pi agent directory for manual setup. Version 1 and version 2 settings are unsupported and are never rewritten.",
   ].join("\n");
 }

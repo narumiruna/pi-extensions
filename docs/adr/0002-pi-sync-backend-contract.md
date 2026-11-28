@@ -185,8 +185,8 @@ in `docs/adr/0001-pi-sync-git-backend.md`.
 - S3/R2 cannot claim the atomic publication semantics available to verified WebDAV and Git; a
   publication can verify successfully and later be superseded by a concurrent pointer write.
 - WebDAV deployments with weak or noncompliant conditional behavior are read-only.
-- A post-commit transport failure may require status/doctor recovery because unknown is an honest
-  terminal result.
+- A post-commit transport failure can leave the outcome unknown. Review differences before retrying
+  a transfer; use History recovery if an active WebDAV snapshot is missing its history entry.
 - Immutable staging can leave unreachable objects after pre-publication failures.
 
 ## Verification

@@ -11,7 +11,7 @@ import {
   listFiles,
   registerRuntimeBuilderContract,
 } from "../../../test/runtime-builder-contract.js";
-import { createMockContext } from "../../../test/support.js";
+import { bindMockToolLoadout, createMockContext } from "../../../test/support.js";
 import { adoptFixtureRoot } from "./daemon-test-helpers.js";
 import { v3WebDavSettings } from "./helpers.js";
 import { deferred } from "./startup-check-helpers.js";
@@ -128,6 +128,7 @@ test("Pi loads the built package and runs the generated recovery and setup route
     });
     await loader.reload();
     const loaded = loader.getExtensions();
+    bindMockToolLoadout(loaded.runtime);
     assert.deepEqual(loaded.errors, []);
     assert.equal(loaded.extensions.length, 1);
     const extension = loaded.extensions[0];
@@ -292,6 +293,7 @@ describe("generated lazy background check", { concurrent: false, shuffle: false 
       loaded = loader.getExtensions();
       await loader.reload();
       loaded = loader.getExtensions();
+      bindMockToolLoadout(loaded.runtime);
       assert.deepEqual(loaded.errors, []);
       assert.equal(loaded.extensions.length, 1);
       assert.ok(loaded.extensions[0]?.commands.has("sync"));

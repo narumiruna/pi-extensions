@@ -114,7 +114,7 @@ try {
   const disabledBytes = await fs.readFile(target);
   const third = await fixture.connect();
   await third.start();
-  await third.command("/sync status", () => true);
+  await third.command("/sync diff", () => true);
   await third.close();
   assert.equal((await findDaemon(fixture.agent))?.identity.instance, owner.identity.instance);
   assert.ok(await stopDaemon(fixture.agent));

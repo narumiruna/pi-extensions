@@ -381,7 +381,7 @@ test("check deadline aborts underlying work and reports one actionable warning",
       await completion.completed;
       assert.equal(released, true);
       assert.equal(context.notifications.length, 1);
-      assert.match(context.notifications[0]?.message ?? "", /timed out.*\/sync status/u);
+      assert.match(context.notifications[0]?.message ?? "", /timed out.*View differences in \/sync/u);
     } finally {
       await controller.stop();
       timerSpy.mockRestore();

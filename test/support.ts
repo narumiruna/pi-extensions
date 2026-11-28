@@ -213,6 +213,14 @@ export function createMockPi(
   };
 }
 
+export function bindMockToolLoadout(runtime: Pick<MockPiApi, "getActiveTools" | "setActiveTools">) {
+  let active: string[] = [];
+  runtime.getActiveTools = () => [...active];
+  runtime.setActiveTools = (names) => {
+    active = [...names];
+  };
+}
+
 export function createMockContext(overrides: Record<string, unknown> = {}) {
   const notifications: Array<{ message: string; level?: string }> = [];
   const statuses = new Map<string, string | undefined>();

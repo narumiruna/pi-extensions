@@ -11,7 +11,7 @@ import {
 import { findDaemon, stopDaemon } from "@narumitw/pi-sync-daemon";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { beforeEach, describe, test } from "vitest";
-import { createMockContext } from "../../../test/support.js";
+import { bindMockToolLoadout, createMockContext } from "../../../test/support.js";
 import { WebDavSyncBackend } from "../src/backends/webdav/webdav-backend.js";
 import { loadConfig } from "../src/settings/config.js";
 import { readClientDebug } from "./client-debug-records.js";
@@ -141,6 +141,7 @@ describe.each(cases)("package-directory Jiti $name", (scenario) => {
     });
     await loader.reload();
     loaded = loader.getExtensions();
+    bindMockToolLoadout(loaded.runtime);
     assert.deepEqual(loaded.errors, []);
     const extension = loaded.extensions[0];
     assert.ok(extension);

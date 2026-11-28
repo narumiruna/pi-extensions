@@ -416,7 +416,9 @@ export async function startServer(root: string, execute: Execute, hooks: ServerH
       validate,
       request,
       emit: (kind, data, target = job.client) => emit(kind, data, target),
-      debug,
+      debug:
+        debug &&
+        ((event, current) => debug(event.event === "check" ? { ...event, operationId: job.view.id } : event, current)),
       noteDebugOutcome(outcome) {
         job.debugOutcome = outcome;
       },

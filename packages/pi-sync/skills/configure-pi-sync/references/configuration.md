@@ -79,13 +79,13 @@ Escape closes the screen without undoing successful saves.
 Complex values retain their input/review flows.
 This navigation change does not alter schema, defaults, automatic-sync behavior, or explicit opt-ins.
 
-The main menu shows cached status separately from transfer, inspection, and management actions. **Check remote status** and **View differences** run their checks only when selected. **Check remote status** (`/sync status`) shows local and remote changes first, or indicates that no previous sync was recorded. Storage, snapshot details, and sync scope follow.
+The main menu shows cached status separately from transfer, inspection, and management actions. **View differences** (`/sync diff`) reads current file differences only when selected. It works with Debug mode off and is not a comparison against the last sync.
 **Last applied** shows a compact snapshot ID and marks application time as unavailable instead of substituting snapshot creation time. **History** shows the full IDs.
 See the [TUI behavior contract](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/docs/tui-contract.md) for scopes and transfer branches.
 
 RPC reports the manual settings path and offers the existing setup/connection catalog dialogs, not the TUI preference or masked-credential editors.
 Print/JSON do not support `/sync`; use the private settings file directly.
-Command hints list `/sync status`, `/sync diff`, and `/sync help`.
+Use `/sync help` to list supported commands.
 
 ### Complete version 3 example
 
@@ -192,7 +192,7 @@ The setting still permits automatic shutdown pushes of selected content when `se
 Reload skips shutdown push.
 Settings changes apply to subsequent operations; changing this setting does not schedule another startup check until the next session start.
 Foreground `/sync` cancels a pending check before opening Settings.
-The check deadline is 30 seconds plus bounded cleanup, with manual retry through `/sync status`; this one-shot policy has no polling.
+The check deadline is 30 seconds plus bounded cleanup. This one-shot policy has no polling. For a fresh baseline-relative comparison, ask Pi to recheck in [Debug mode](#debug-mode).
 See [Background startup checks](https://github.com/narumiruna/pi-extensions/blob/main/packages/pi-sync/README.md#background-startup-checks) for recovery and Git cache exceptions.
 
 New TUI setups recommend **Selected paths**: Recommended includes the nine non-session Pi roots below, and Minimal includes only `settings.json` and `AGENTS.md`. Agent-directory scope is an explicit alternative.
@@ -236,7 +236,7 @@ This is not permission to sync, change retry policy, or erase recovery evidence.
 Retry and blocked states keep a short reason: `temp` (temporary service/network failure), `busy` (lock contention), `stale` (changed evidence), `auth` (authentication), `storage` (local storage), `review` (safety barrier), `model` (resolver/model failure or exhausted candidate attempts), `limit` (request-window allowance), or `unknown` (unclassified failure).
 Settings or private-state repair uses `repair`.
 A request-window limit is not a currency budget; exhausted attempts for one candidate remain a model block, not a timer-based allowance reset.
-Use the existing manager and **Check remote status** guidance to inspect recovery requirements rather than treating a short marker as a complete diagnosis.
+Use the manager and [local troubleshooting](#local-troubleshooting) to inspect recovery requirements rather than treating a short marker as a complete diagnosis.
 
 <a id="debug-startup-timings"></a>
 
@@ -244,7 +244,13 @@ Use the existing manager and **Check remote status** guidance to inspect recover
 
 The top-level user setting `debug` is an optional boolean and defaults to `false` for every setup. Use **/sync → Settings → Debug mode** or edit `<getAgentDir()>/pi-sync.json` (normally `~/.pi/agent/pi-sync.json`). UI changes save immediately through the existing ordered, atomic settings writer. There is no project or environment override.
 
-Pi uses the saved value from session start, including `/reload`, new, resume, and fork, for client logging and timing display. The daemon uses the agent directory's validated setting for file logging, not a connected client's value. It applies changes at the next applicable owner or job boundary without a restart. A missing or false `debug` value does not enable logging; the daemon can skip records when it cannot validate settings. Turning on Debug mode does not start a new check or transfer, or grant permission for work after Pi exits.
+Pi uses the saved value from session start, including `/reload`, new, resume, and fork, for client logging, timing display, and `pi_sync_debug` availability in TUI and RPC. The daemon uses the agent directory's validated setting for file logging, not a connected client's value. It applies changes at the next applicable owner or job boundary without a restart. A missing or false `debug` value does not enable logging; the daemon can skip records when it cannot validate settings. Turning on Debug mode does not start a new check or transfer, or grant permission for work after Pi exits.
+
+#### Ask Pi to explain a check
+
+`pi_sync_debug` is available only in TUI and RPC sessions started or reloaded with Debug mode on, subject to Pi's tool allowlist. `latest` reads the most recent matching summary within the last 64 KiB of the private log. `recheck` reviews the named setup and asks before making a fresh read and returning a summary to the model. A declined or cancelled confirmation, or one that cannot be shown, makes no remote request. The tool does not publish, apply, test writes, or repair History.
+
+A summary can include times, where the check came from, whether a previous sync was recorded, which side changed, whether file selections agree, file counts, and fixed failure categories. Stale, unavailable, and not-run results are not evidence of equality. Results omit secrets, setup names and fingerprints, addresses, paths, device names, snapshot IDs, content, and raw errors or log lines.
 
 #### Shared log
 
@@ -284,17 +290,12 @@ The global `skipSecretScan` setting accepts a boolean and defaults to `false`, i
 Set it through **/sync → Settings → Skip secret scan**; changes are saved immediately and apply to subsequent pushes for every sync setup, including automatic pushes.
 When `true`, pushes skip the local secret scan; other safety checks and confirmations remain unchanged.
 Enable it only after reviewing the destination and selected content because files containing secrets can be uploaded.
-`/sync doctor` still scans and reports possible secrets regardless of this setting.
 
 ### Diagnostics
 
-**/sync → Diagnostics** and `/sync doctor` use the same route. The report puts findings that need attention first, followed by local checks, storage checks, and sync scope.
-S3/R2 reads the selected setup's latest pointer with a ten-second deadline and bounded error details; it never writes, deletes, lists buckets, or changes settings.
-HTTP success does not validate snapshot contents or write access.
-`NoSuchKey` indicates no snapshot at the path; `NoSuchBucket` indicates a missing bucket; other 404 responses cannot distinguish the two.
-Authentication and transport failures give credentials/permissions or address/network guidance.
-Git reads remote snapshots and checks its local cache; write access is not tested.
-WebDAV retains its isolated conditional-write/cleanup probe and repair of a missing active-snapshot history entry.
+Use **/sync → Settings** to review sync setups and storage connections. Use **View differences** to compare files without transferring them, or ask Pi to use the [Debug tool](#ask-pi-to-explain-a-check) for a baseline-relative check. Neither read proves that storage accepts writes. Push keeps its existing safety checks, including temporary conditional-write probes on WebDAV and S3/R2.
+
+If a WebDAV publication activated a snapshot but left its entry missing, open **/sync → History** and select **Repair active snapshot history** when offered. The confirmation names the setup, destination, and snapshot. After approval, Pi Sync runs an isolated conditional-write probe and cleans it up, then adds the missing entry if it is still needed and safe. The active snapshot and local files stay unchanged. This action is separate from diagnostics and is never automatic.
 
 ### Local troubleshooting
 
@@ -306,9 +307,9 @@ Use the first concrete error, not a generic recovery hint appended to it. Start 
 | **Agent directory changed or has an unsafe filesystem layout** | The local scan could not establish a stable filesystem view. Use file metadata to check the agent root, Pi's `settings.json`, the effective session directory (including any `--session-dir` override), and in-scope paths. Symlinks in the session directory path and hard-linked candidate files can trigger this error; ordinary symlinks encountered in the directory scan are skipped. Check whether another Pi process or editor is changing files during the scan. Do not change synchronization settings unless the evidence identifies a relevant setting; this error alone does not identify a path or field. |
 | **Transfer blocked by size limits** | Check the reported paths and byte counts. Use `/sync diff`, then narrow the selection or review a different source. See [transfer size limits](#transfer-size-limits). |
 | **Malformed or unsupported settings** | Check the canonical path and documented version and field constraints. Preserve the original private bytes and follow [settings recovery](#unsupported-old-settings-and-recovery); do not replace the document with defaults. |
-| **Backend access or publication failure** | Use the reported error class to distinguish credentials, a missing location, transport, and publication safety. A 404 alone does not identify which remote resource is missing. If local checks are insufficient, explain the backend-specific effects of [Diagnostics](#diagnostics) and leave that action to the user. |
+| **Backend access or publication failure** | Use the reported error class to distinguish credentials, a missing location, transport, and publication safety. A 404 alone does not identify which remote resource is missing. If local checks are insufficient, explain the [read and recovery options](#diagnostics). Do not treat a successful read as proof of write access. |
 
-A local check does not verify remote connectivity or permissions. Diagnostics can stop at the same local scan error before backend checks run.
+A local check does not verify remote connectivity or permissions. A fresh comparison can also stop at a local scan error before contacting storage.
 
 ### Retired ignore-file policy
 
@@ -759,7 +760,7 @@ Keep the directory as private evidence; do not delete it to repair a transfer.
 
 The existing raw status key shows waiting, checking/syncing, scheduled retry, another local owner, or a stable blocked reason.
 A compatible Statusline uses the [quiet presentation described above](#status-display); normal hidden standby does not mean monitoring or another owner's work has stopped.
-**Check remote status** and the manager show advisory ownership, the last successful background check/transfer and safe next actions.
+The manager shows cached observations and safe next actions; use `/sync daemon status` for current daemon ownership.
 Status also shows normalized rolling-window usage, the next window allowance, exhausted-candidate counts, serialized accounting bytes/capacity and on-disk bytes.
 Window allowance is not dispatch permission: candidate, capacity, ownership and safety checks still apply.
 Status normalization affects only the detached read; it does not expire durable calls, reserve requests, create private directories or reset limits.
@@ -889,7 +890,7 @@ Recovery:
 1. retain the old file byte-for-byte;
 2. move it aside manually;
 3. create a new version 3 document or run the setup manager;
-4. run `/sync doctor`, inspect the exact storage path, and review the first pull or push;
+4. review **Storage location** in **/sync → Settings**, inspect file differences with `/sync diff`, and review the first pull or push;
 5. restore the retained file and a compatible older package only if rolling back.
 
 If your processes reject a newer settings version, keep the document and use compatible Pi Sync and daemon builds. In particular, [clearing transfer size limits](#transfer-size-limits) never downgrades version 9. Do not use the recovery steps above to replace a newer document.

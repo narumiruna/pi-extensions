@@ -324,6 +324,11 @@ export class PiDaemonClient {
   get debugEnabled() {
     return this.debug;
   }
+  validateDebugTool() {
+    this.validate();
+    if (!this.debug || !this.ownsContactUI() || this.pendingReload)
+      throw new Error("Pi Sync debug is not available in this session.");
+  }
   setDebugPreference(debug: boolean) {
     this.debug = debug && this.ctx.hasUI && (this.ctx.mode === "tui" || this.ctx.mode === "rpc");
   }

@@ -46,6 +46,13 @@ export interface PublishSnapshotResult {
   warnings: string[];
 }
 
+export interface HistoryRepairOptions {
+  signal?: AbortSignal;
+  validateOwner(): void;
+  validateSettings(): Promise<void>;
+  onCommit?: () => void;
+}
+
 export interface BackendDiagnostic {
   key: string;
   level: "info" | "warning" | "error";
@@ -69,6 +76,7 @@ export interface SyncBackend {
     options?: PublishSnapshotOptions,
   ): Promise<PublishSnapshotResult>;
   listHistory(signal?: AbortSignal): Promise<RemoteHistoryEntry[]>;
+  repairActiveHistory?(expected: RemoteHead, options: HistoryRepairOptions): Promise<boolean>;
   diagnose(signal?: AbortSignal): Promise<BackendDiagnostic[]>;
 }
 

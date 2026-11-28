@@ -6,7 +6,11 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { syncBoth } from "@narumitw/pi-sync-daemon/engine/sync/sync-operations";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
-import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
+import {
+  createCustomSelectorHarness,
+  createMockContext,
+  createMockPi as createUnstartedMockPi,
+} from "../../../test/support.js";
 import {
   completeSyncArguments,
   parseOptions,
@@ -40,7 +44,12 @@ test("sync command catalog and usage document setup-addressing routes", () => {
   assert.ok(SYNC_COMMANDS.some((command) => command.name === "use"));
   assert.match(usage(), /use <setup>/u);
   assert.match(usage(), /Version 1 and version 2 settings are unsupported/u);
-  assert.doesNotMatch(usage(), /`profiles`|`targets`|--target/u);
+  assert.doesNotMatch(
+    usage(),
+    /`profiles`|`targets`|--target|\/sync (status|doctor|config)|^Commands:.*\b(?:doctor|config)\b/mu,
+  );
+  assert.match(usage(), /\/sync daemon status/u);
+  assert.match(usage(), /\/sync → Settings/u);
   const readme = readFileSync(`${process.cwd()}/packages/pi-sync/README.md`, "utf8");
   for (const command of SYNC_COMMANDS) {
     assert.match(readme, new RegExp(`\\/sync ${command.name}\\b`, "u"));
@@ -70,9 +79,19 @@ test("--setup is canonical and --target is rejected by the breaking version 3 ro
 
 test("argument completion retains prior tokens and completes known setup names", () => {
   setSyncSetupCompletions(["home", "work"]);
-  assert.ok(completeSyncArguments("")?.some((item) => item.value === "status"));
-  assert.ok(completeSyncArguments("status --s")?.some((item) => item.value === "status --setup"));
-  assert.ok(completeSyncArguments("status --setup w")?.some((item) => item.value === "status --setup work"));
+  assert.ok(completeSyncArguments("")?.some((item) => item.value === "diff"));
+  assert.ok(completeSyncArguments("diff --s")?.some((item) => item.value === "diff --setup"));
+  assert.ok(completeSyncArguments("diff --setup w")?.some((item) => item.value === "diff --setup work"));
+  assert.deepEqual(
+    completeSyncArguments("daemon st")?.map(({ value }) => value),
+    ["daemon status"],
+  );
+  for (const retired of ["status", "doctor", "config"]) {
+    assert.ok(!completeSyncArguments("")?.some((item) => item.value === retired));
+    for (const suffix of ["", " ", " --s", " --setup ", " --setup w"]) {
+      assert.equal(completeSyncArguments(`${retired}${suffix}`), null);
+    }
+  }
   assert.ok(completeSyncArguments("conflicts --s")?.some((item) => item.value === "conflicts --setup"));
   assert.ok(completeSyncArguments("conflicts --setup w")?.some((item) => item.value === "conflicts --setup work"));
   assert.equal(completeSyncArguments("conflicts --force"), null);
@@ -144,15 +163,37 @@ test("migrate-state TUI cancellation leaves legacy state unchanged", async () =>
   });
 });
 
-test("print and JSON modes reject before relying on no-op UI output", async () => {
+test.each(["tui", "rpc"] as const)(
+  "%s rejects retired commands with migration advice before session readiness",
+  async (mode) => {
+    const mock = createUnstartedMockPi();
+    sync(mock.pi);
+    const { ctx, notifications } = createMockContext({ mode });
+    const command = mock.commands.get("sync");
+    assert.ok(command);
+    await command.handler(" status --setup work", ctx);
+    await command.handler("doctor --yes", ctx);
+    await command.handler("config --setup work", ctx);
+    assert.deepEqual(
+      notifications.map(({ level }) => level),
+      ["warning", "warning", "warning"],
+    );
+    assert.match(notifications[0]?.message ?? "", /\/sync status was retired.*\/sync diff.*Debug mode/u);
+    assert.match(notifications[1]?.message ?? "", /\/sync doctor was retired.*\/sync → Settings.*History/u);
+    assert.match(notifications[2]?.message ?? "", /\/sync config was retired.*\/sync → Settings/u);
+  },
+);
+
+test.each(["print", "json"] as const)("%s rejects before relying on no-op UI output", async (mode) => {
   const mock = createMockPi();
   sync(mock.pi);
-  const { ctx } = createMockContext({ hasUI: false, mode: "print" });
+  const { ctx, notifications } = createMockContext({ hasUI: false, mode });
   const command = mock.commands.get("sync");
   assert.ok(command);
-  await assert.rejects(async () => {
-    await command.handler("help", ctx);
-  }, /requires TUI or RPC mode/u);
+  for (const route of ["help", "status", "doctor", "config", "daemon status"]) {
+    await assert.rejects(async () => command.handler(route, ctx), /requires TUI or RPC mode/u);
+  }
+  assert.deepEqual(notifications, []);
 });
 
 test("RPC init creates a valid empty version 3 document", async () => {
@@ -997,7 +1038,7 @@ test("unknown and trailing direct arguments fail observably without changing set
     const mock = createMockPi();
     sync(mock.pi);
     const { ctx, notifications } = createMockContext({ hasUI: true, mode: "rpc" });
-    await mock.commands.get("sync")?.handler("status trailing", ctx);
+    await mock.commands.get("sync")?.handler("diff trailing", ctx);
     assert.match(notifications.at(-1)?.message ?? "", /Unexpected argument/u);
     assert.deepEqual(readFileSync(localConfigPath()), before);
   });

@@ -17,7 +17,7 @@ initTheme("dark", false);
 
 test.each([
   ["initialize", "rpc"],
-  ["status", "tui"],
+  ["diff", "tui"],
 ] as const)("the %s failure exposes daemon recovery without another engine job (%s)", (operation, mode) =>
   withTempHome(async (root) => {
     await fs.mkdir(root, { recursive: true });
@@ -63,7 +63,7 @@ test.each([
       await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, ctx);
       const command = mock.commands.get("sync");
       assert.ok(command);
-      if (operation === "status") await command.handler("status", ctx);
+      if (operation === "diff") await command.handler("diff", ctx);
       assert.ok(notifications.some((event) => /open \/sync/iu.test(event.message)));
       const owner = (await findDaemon(root))?.identity;
       assert.ok(owner);

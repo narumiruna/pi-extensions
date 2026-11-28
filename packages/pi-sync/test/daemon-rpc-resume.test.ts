@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { type ClientFacts, findDaemon } from "@narumitw/pi-sync-daemon";
+import { type ClientFacts, DaemonConnection, findDaemon } from "@narumitw/pi-sync-daemon";
 import { beforeEach, test, vi } from "vitest";
 import { createRpcFixture, type RpcFixture } from "./daemon-rpc-fixture.js";
 import type { SyncRpc } from "./daemon-rpc-helpers.js";
@@ -61,18 +62,72 @@ async function checkedDaemonStatus() {
   await checkedCommand("/sync daemon status", `pi-sync-daemon: connected\nPID: ${daemon.pid}\nInstance: ${instance}`);
 }
 
-test("real Pi RPC receives both sync reports with their section breaks", async () => {
-  await checkedCommand(
-    "/sync status",
-    "Remote status · home\n\nNo previous sync recorded\n  Local: 1 file\n  Remote: empty",
+test("supported daemon peers still receive both compatibility reports with section breaks", async ({ signal }) => {
+  const owner = await findDaemon(fixture.agent);
+  assert.ok(owner);
+  const reports: string[] = [];
+  const peer = new DaemonConnection(
+    owner.paths,
+    owner.identity,
+    {
+      id: randomUUID(),
+      generation: randomUUID(),
+      pid: process.pid,
+      cwd: fixture.cwd,
+      mode: "rpc",
+      hasUI: true,
+      idle: false,
+    },
+    {
+      callback: async () => false,
+      event(event) {
+        if (event.kind !== "notify") return;
+        const payload = event.payload as { layout?: string; message?: string };
+        if (payload.layout === "report" && typeof payload.message === "string") reports.push(payload.message);
+      },
+    },
   );
-  assert.ok(fixture.storage.requests.every(({ method }) => method === "GET" || method === "PROPFIND"));
-  await checkedCommand("/sync doctor", "Diagnostics · home\n\nLocal checks\n  Configuration: OK");
-  const report = client.records.find(({ message }) => String(message).startsWith("Diagnostics · home\n"));
-  assert.match(String(report?.message), /\n\nStorage · dav\n {2}Location: /u);
-  assert.match(String(report?.message), /\n\nSync scope\n {2}included content: AGENTS\.md\n {2}sessions: excluded$/u);
-  assert.match(String(report?.message), /Publication safety: atomic-conditional/u);
-  assert.ok(fixture.storage.requests.some(({ method }) => method === "DELETE"));
+  try {
+    await peer.attach();
+    const storageFrom = fixture.storage.requests.length;
+    await peer.run("status", { args: [] }, signal);
+    const statusRequests = fixture.storage.requests.slice(storageFrom);
+    assert.ok(statusRequests.length > 0);
+    assert.ok(statusRequests.every(({ method }) => method === "GET" || method === "PROPFIND"));
+    await peer.run("doctor", { args: [] }, signal);
+    assert.equal(reports.length, 2);
+    assert.match(
+      reports[0] ?? "",
+      /^Remote status · home\n\nNo previous sync recorded\n {2}Local: 1 file\n {2}Remote: empty/u,
+    );
+    const report = reports[1] ?? "";
+    assert.match(report, /^Diagnostics · home\n\nLocal checks\n {2}Configuration: OK/u);
+    assert.match(report, /\n\nStorage · dav\n {2}Location: /u);
+    assert.match(report, /\n\nSync scope\n {2}included content: AGENTS\.md\n {2}sessions: excluded$/u);
+    assert.match(report, /Publication safety: atomic-conditional/u);
+    assert.ok(fixture.storage.requests.some(({ method }) => method === "DELETE"));
+  } finally {
+    await peer.dispose();
+  }
+});
+
+test("real Pi RPC rejects retired commands without repairing contact or accessing storage", async () => {
+  await daemon.expire(true);
+  try {
+    const storageFrom = fixture.storage.requests.length;
+    await checkedCommand("/sync status --setup home", "/sync status was retired. Use /sync diff");
+    await checkedCommand("/sync doctor", "/sync doctor was retired. Open /sync → Settings");
+    await checkedCommand("/sync config --setup home", "/sync config was retired. Open /sync → Settings");
+    const wire = (await daemon.inspect()).slice(before);
+    assert.ok(
+      wire.every(({ method }) => !["attach", "update", "submit", "resume-contact"].includes(method)),
+      JSON.stringify(wire),
+    );
+    assert.equal(fixture.storage.requests.length, storageFrom);
+    assert.equal(fixture.requests.length, 0);
+  } finally {
+    await daemon.release();
+  }
 });
 
 async function sameSessionWire() {
@@ -157,11 +212,11 @@ test("the first real Pi RPC daemon status repairs idle heartbeat expiry in the s
   } finally {
     await daemon.release();
   }
-  await checkedCommand("/sync status", "Remote: empty");
+  await checkedCommand("/sync diff", "Remote is empty. Local push would upload");
   const wire = await checkSameSession();
   assert.deepEqual(
     wire.filter(({ method }) => method === "submit").map(({ operation }) => operation),
-    ["status"],
+    ["diff"],
   );
   assert.ok(fixture.storage.requests.every(({ method }) => method === "GET" || method === "PROPFIND"));
 });
@@ -220,7 +275,7 @@ test("real Pi RPC recovery does not replay a push interrupted by heartbeat expir
     { timeout: 1_500 },
   );
   await checkedDaemonStatus();
-  await checkedCommand("/sync status", "Remote: empty");
+  await checkedCommand("/sync diff", "Remote is empty. Local push would upload");
   await checkSameSession();
   await client.close();
   const wire = (await daemon.inspect()).slice(before);
@@ -269,14 +324,14 @@ test.each(["before-accept", "after-accept"] as const)(
     );
     await pull;
     await checkedDaemonStatus();
-    await checkedCommand("/sync status", "Changes since last sync\n  Local: unchanged");
+    await checkedCommand("/sync diff", "No file differences.");
     await sameSessionWire();
     await client.close();
     const wire = (await daemon.inspect()).slice(wireFrom);
     const submissions = wire.filter(({ method, operation }) => method === "submit" && operation !== "shutdown");
     assert.deepEqual(
       submissions.map(({ operation }) => operation),
-      ["pull", "status"],
+      ["pull", "diff"],
     );
     const pullId = submissions[0]?.id;
     assert.ok(pullId);
@@ -310,14 +365,14 @@ test.each(["before-accept", "after-accept"] as const)(
     assert.equal(await fs.readFile(file, "utf8"), remote);
     assert.ok(
       fixture.storage.requests.slice(storageFrom).every(({ method }) => method === "GET" || method === "PROPFIND"),
-      "The pull and status must not publish remote writes",
+      "The pull and diff must not publish remote writes",
     );
     const output = client.records.slice(outputFrom).filter(({ type }) => type === "extension_ui_request");
     const notifications = output.filter(({ method }) => method === "notify");
     assert.equal(notifications.length, 3, JSON.stringify(notifications));
     assert.match(String(notifications[0]?.message), /^Pulled 1 files from /u);
     assert.match(String(notifications[1]?.message), /^pi-sync-daemon: connected\n/u);
-    assert.match(String(notifications[2]?.message), /^Remote status · home\n/u);
+    assert.match(String(notifications[2]?.message), /^sync setup: home\b.*No file differences\./su);
     const status = output.filter(({ method, statusKey }) => method === "setStatus" && statusKey === "sync");
     assert.ok(status.length > 0, "No sync status records");
     assert.equal(status.at(-1)?.statusText, undefined);

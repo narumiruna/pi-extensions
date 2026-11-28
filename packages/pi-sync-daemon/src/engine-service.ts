@@ -8,6 +8,7 @@ import {
 import { createDaemonDebug } from "./daemon-debug.js";
 import { type DocumentView, documentFingerprint } from "./document.js";
 import type { CommandOptions } from "./engine/commands/command-types.js";
+import { type DebugCheckSummary, debugCheckFailure, summarizeDebugInspection } from "./engine/debug-check.js";
 import type { EngineContext } from "./engine/host.js";
 import { retiredIgnorePolicy } from "./engine/settings/retired-ignore-policy.js";
 import { assertNoRetiredRuleJournal } from "./engine/settings/retired-ignore-recovery.js";
@@ -141,27 +142,7 @@ export function createEngineService(root: string) {
       }
       const ctx = createServiceContext(execution);
       if (operation === "initialize") return initialize(ctx, execution);
-      if (operation === "inspect") {
-        if (!record(payload) || (payload.setup !== undefined && typeof payload.setup !== "string"))
-          throw new Error("Invalid inspection request.");
-        const { withStateDirectoryAccess } = await import("./engine/state/state-directory.js");
-        const { withLock } = await import("./engine/state/lock.js");
-        return withJobTimings(ctx, execution, "daemon inspection", (timings) =>
-          withStateDirectoryAccess(() =>
-            withLock("startup-check", async () => {
-              const { loadConfigForCheck, syncCheckConfigFingerprint } = await import("./engine/settings/config.js");
-              const config = await loadConfigForCheck(payload.setup as string | undefined, execution.signal);
-              execution.validate();
-              if (payload.fingerprint !== syncCheckConfigFingerprint(config))
-                throw new Error("Settings changed before inspection.");
-              const { snapshotOptionsForContext } = await import("./engine/snapshot/session-paths.js");
-              const { inspectSync } = await import("./engine/sync/sync-inspection.js");
-              execution.validate();
-              return inspectSync(config, snapshotOptionsForContext(ctx, config), execution.signal, undefined, timings);
-            }),
-          ),
-        );
-      }
+      if (operation === "inspect") return inspectForClient(ctx, execution, payload);
       if (operation === "push.foreground" || operation === "pull.foreground") {
         const direction = operation === "push.foreground" ? "push" : "pull";
         return runForegroundDirectional(host, execution, ctx, direction, payload);
@@ -297,7 +278,8 @@ export function createEngineService(root: string) {
         }
         if (operation === "push" || operation === "pull" || operation === "rollback")
           return withLock<unknown>(operation, () => operations[operation](ctx, options));
-        if (operation === "status" || operation === "diff" || operation === "doctor" || operation === "history")
+        if (operation === "history") return operations.history(ctx, options, undefined, execution.validate);
+        if (operation === "status" || operation === "diff" || operation === "doctor")
           return operations[operation](ctx, options);
         throw new Error("Unreachable operation.");
       });
@@ -404,6 +386,85 @@ async function runForegroundDirectional(
   });
 }
 
+async function inspectForClient(ctx: EngineContext, execution: Execution, payload: unknown) {
+  if (
+    !record(payload) ||
+    (payload.setup !== undefined && typeof payload.setup !== "string") ||
+    (payload.origin !== undefined && payload.origin !== "recheck")
+  )
+    throw new Error("Invalid inspection request.");
+  const origin = payload.origin === "recheck" ? "recheck" : "startup";
+  const setup = typeof payload.setup === "string" ? payload.setup : undefined;
+  if (
+    origin === "recheck" &&
+    (!ctx.hasUI || !["tui", "rpc"].includes(ctx.mode) || !execution.facts()?.startupDebug || !setup)
+  )
+    throw new Error("Recheck requires an interactive Debug mode session.");
+  const configChanged = () =>
+    Object.assign(new Error("Settings changed during inspection."), { code: "SYNC_INSPECTION_CHANGED" });
+  let setupKey: string | undefined;
+  const note = (summary: DebugCheckSummary) => {
+    if (setupKey && !execution.signal.aborted) execution.debug?.({ event: "check", origin, setupKey, summary });
+  };
+  const { withStateDirectoryAccess } = await import("./engine/state/state-directory.js");
+  const { withLock } = await import("./engine/state/lock.js");
+  try {
+    const result = await withJobTimings(ctx, execution, "daemon inspection", (timings) =>
+      withStateDirectoryAccess(() =>
+        withLock("startup-check", async () => {
+          const [
+            { loadConfigForCheck, syncCheckConfigFingerprint, syncConfigReviewFingerprint },
+            { snapshotOptionsForContext },
+            { inspectSync },
+          ] = await Promise.all([
+            import("./engine/settings/config.js"),
+            import("./engine/snapshot/session-paths.js"),
+            import("./engine/sync/sync-inspection.js"),
+          ]);
+          const readReviewed = async () => {
+            execution.validate();
+            const config = await loadConfigForCheck(origin === "recheck" ? undefined : setup, execution.signal);
+            execution.validate();
+            if (
+              payload.fingerprint !== syncCheckConfigFingerprint(config) ||
+              (origin === "recheck" && setup !== config.setupName)
+            )
+              throw configChanged();
+            return config;
+          };
+          const config = await readReviewed();
+          execution.validate();
+          setupKey = syncConfigReviewFingerprint(config);
+          const revalidate =
+            origin === "recheck"
+              ? async () => {
+                  await readReviewed();
+                }
+              : undefined;
+          const inspected = await inspectSync(
+            config,
+            snapshotOptionsForContext(ctx, config),
+            execution.signal,
+            undefined,
+            timings,
+            revalidate,
+          );
+          execution.validate();
+          if (revalidate) await revalidate();
+          return inspected;
+        }),
+      ),
+    );
+    execution.validate();
+    const summary = summarizeDebugInspection(result);
+    if (summary) note(summary);
+    return result;
+  } catch (error) {
+    note(debugCheckFailure(error));
+    throw error;
+  }
+}
+
 async function withJobTimings<T>(
   ctx: EngineContext,
   execution: Execution,
@@ -436,7 +497,7 @@ async function requireStartupRecoveryCleared(execution: Execution) {
   execution.validate();
   if (pending.length)
     throw new Error(
-      "Pi Sync startup cannot confirm recovery is clear. Preserve recovery files and check /sync doctor before retrying.",
+      "Pi Sync startup cannot confirm recovery is clear. Preserve recovery files and use /sync daemon status for recovery guidance before retrying.",
     );
 }
 
