@@ -7,7 +7,6 @@ import type { SyncRpc } from "./daemon-rpc-helpers.js";
 import { adoptFixtureRoot } from "./daemon-test-helpers.js";
 
 const name = "pi_sync_debug";
-const debugLogWait = { timeout: 3_000 };
 type Message = { role: string; content?: string };
 const messages = (request: Record<string, unknown>) => request.messages as Message[];
 const tools = (request: Record<string, unknown>) =>
@@ -84,7 +83,7 @@ for (const debug of [false, true]) {
             .split("\n")
             .map((line) => JSON.parse(line));
           const entry = entries.find((entry) => entry.event === "check" && entry.origin === "recheck");
-          assert.ok(entry?.operationId, "Expected a correlated recheck in the daemon's debug log");
+          assert.ok(entry?.operationId);
           assert.ok(
             entries.some(
               (job) => job.event === "job" && job.operation === "inspect" && job.operationId === entry.operationId,
@@ -92,7 +91,7 @@ for (const debug of [false, true]) {
           );
           assert.doesNotMatch(contents, /AGENTS\.md|127\.0\.0\.1|Test-owned parent instructions/u);
           return entry;
-        }, debugLogWait);
+        });
         action = "latest";
         assert.deepEqual(await prompt(), {
           kind: "historical",
@@ -130,7 +129,7 @@ for (const debug of [false, true]) {
           const check = records.find((event) => event.event === "check" && event.origin === "recheck");
           assert.deepEqual(check?.summary, { outcome: "failed", reason: "permission" });
           assert.doesNotMatch(log, /127\.0\.0\.1|pi-sync\/home|HTTP 403/u);
-        }, debugLogWait);
+        });
       });
 
       test("reloading with Debug mode off removes the tool without reordering other tools", async () => {
