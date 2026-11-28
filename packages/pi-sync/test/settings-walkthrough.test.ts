@@ -57,6 +57,7 @@ for (const [width, rows] of [
         assert.deepEqual(context.notifications, []);
         tui.send("\u007f");
         assert.match(frame(), /^→ Debug mode\s+Off$/mu);
+        assert.match(frame(), /recheck\s+remote\s+storage\s+without\s+asking/u);
         tui.press("tui.select.confirm");
         await tui.waitForPending();
         await tui.waitForOpen();

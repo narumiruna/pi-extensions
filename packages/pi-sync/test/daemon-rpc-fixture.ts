@@ -22,7 +22,7 @@ export interface RpcFixture {
 /** Own setup and teardown separately from each five-second operation test. */
 export async function createRpcFixture(
   context: { signal: AbortSignal; onTestFinished(cleanup: () => Promise<void>): void },
-  extension = path.resolve("packages/pi-sync/src/index.ts"),
+  extension: string | readonly string[] = path.resolve("packages/pi-sync/src/index.ts"),
   startOwner: (agent: string) => Promise<() => Promise<unknown>> = async (agent) => {
     await ensureDaemon(agent);
     return () => stopDaemon(agent);

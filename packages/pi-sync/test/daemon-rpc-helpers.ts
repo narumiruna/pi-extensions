@@ -33,7 +33,7 @@ export class SyncRpc {
   constructor(
     root: string,
     cwd: string,
-    extension: string,
+    extension: string | readonly string[],
     sessionDir?: string,
     private readonly signal?: AbortSignal,
     sessionFile?: string,
@@ -64,8 +64,7 @@ export class SyncRpc {
         "fixture",
         ...(sessionDir ? ["--session-dir", sessionDir] : []),
         ...(sessionFile ? ["--session", sessionFile] : []),
-        "-e",
-        extension,
+        ...(typeof extension === "string" ? [extension] : extension).flatMap((entry) => ["-e", entry]),
       ],
       {
         cwd,

@@ -83,7 +83,7 @@ RPC and the TUI harness verify this ordering. The native Fedora/tmux flow from [
 
 ## Review boundaries
 
-Manager opening and refresh remain observational and do not contact remote storage. Existing startup/session signals and Kit/custom-interaction disposal own the UI calls. After a review, operations validate the session owner and revalidate mutable inputs before committing. Registering `pi_sync_debug` does not add prompt context or change other tool definitions. The active tool list changes only at a session boundary when the saved Debug mode or mode eligibility changes.
+Manager opening and refresh remain observational and do not contact remote storage. Existing startup/session signals and Kit/custom-interaction disposal own the UI calls. After a review, operations validate the session owner and revalidate mutable inputs before committing. Pi Sync activates `pi_sync_debug` at the session boundary only when the saved Debug mode and session mode allow it. Pi exposes the active tool directly and through codemode; `codemode.mode: "only"` hides the direct declaration and lists the tool in codemode instead. Pi Sync adds no prompt messages or per-turn tool updates. `recheck` does not request UI confirmation. It keeps session and setup revalidation, cancellation, and sanitized read-only results.
 
 ## Quiet footer presentation
 

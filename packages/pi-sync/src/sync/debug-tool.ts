@@ -5,7 +5,6 @@ import { readLatestDebugCheck } from "@narumitw/pi-sync-daemon/engine/debug-log"
 import { Type } from "typebox";
 import type { PiDaemonClient } from "../daemon/pi-client.js";
 import { configFromSettings, syncCheckConfigFingerprint, syncConfigReviewFingerprint } from "../settings/config.js";
-import { safeTerminalText } from "../ui/terminal-text.js";
 
 const TOOL_NAME = "pi_sync_debug";
 const RECHECK_TIMEOUT_MS = 30_000;
@@ -20,10 +19,10 @@ export function registerPiSyncDebug(pi: ExtensionAPI, getOwner: (ctx: ExtensionC
     name: TOOL_NAME,
     label: "Pi Sync debug",
     description:
-      "Read the latest sanitized Pi Sync check, or ask for user confirmation to recheck the current setup without publishing or applying files.",
+      "Read the latest sanitized Pi Sync check from the local log (latest), or read configured remote storage without confirmation to return a fresh sanitized summary (recheck). Does not publish or apply files.",
     parameters: Type.Object({ action: StringEnum(["latest", "recheck"]) }, { additionalProperties: false }),
     defaultActive: false,
-    exposure: "model-only",
+    exposure: "direct",
     executionMode: "sequential",
     async execute(_id, { action }, toolSignal, _update, ctx) {
       const owner = getOwner(ctx);
@@ -62,23 +61,6 @@ export function registerPiSyncDebug(pi: ExtensionAPI, getOwner: (ctx: ExtensionC
       if (action !== "recheck") throw new Error("Choose latest or recheck.");
       if (client.ownershipCleanupRequired) throw new Error("Pi Sync needs recovery. Open /sync daemon status.");
       const fingerprint = syncCheckConfigFingerprint(setup);
-      let accepted: boolean;
-      try {
-        accepted = await ctx.ui.confirm(
-          "Recheck Pi Sync?",
-          `Setup: ${safeTerminalText(setup.setupName)}\nStorage connection: ${safeTerminalText(setup.connectionName)}\nRead the configured remote to compare it with local sync state. Nothing will be published or applied. The model receives a summary without storage addresses or file paths.`,
-          { signal },
-        );
-      } catch {
-        validate();
-        throw new Error("Pi Sync recheck requires an available confirmation UI.");
-      }
-      validate();
-      if (!accepted) return toolResult({ kind: "declined" });
-      const current = await readSetup();
-      validate();
-      if (fingerprint !== syncCheckConfigFingerprint(current))
-        throw new Error("Pi Sync setup changed before recheck. Ask to recheck the new setup.");
       const deadline = AbortSignal.timeout(RECHECK_TIMEOUT_MS);
       const recheckSignal = AbortSignal.any([signal, deadline]);
       let result: unknown;

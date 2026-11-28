@@ -300,8 +300,7 @@ export async function showSyncSettings(
           {
             id: "debug",
             label: "Debug mode",
-            description:
-              "Write startup timings and sync events to the local pi-sync.log. Pi applies this at the next session start; the daemon applies it at its next settings check.",
+            description: "Next session: log to pi-sync.log and let the model recheck remote storage without asking.",
             currentValue: state.debug ? "On" : "Off",
             values: ["On", "Off"],
             action: "debug",

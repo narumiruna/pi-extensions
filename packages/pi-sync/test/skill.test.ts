@@ -143,7 +143,7 @@ test("skill separates authorized local changes from read-only troubleshooting an
     "without contacting the daemon",
     "never raw log lines",
     "use `pi_sync_debug` with `recheck` only when available",
-    "If it is unavailable or the user declines, do not use another tool to make the read",
+    "If it is unavailable, do not use another tool to make the read",
     "do not enable Debug mode or start a transfer just to collect evidence",
     "Leave operations that Pi Sync requires the user to review in `/sync`",
     "Do not start sync, run backend/network commands",

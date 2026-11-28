@@ -69,7 +69,7 @@ Inspect only the necessary local metadata and relevant non-secret configuration 
 Do not ask the user to paste those contents or execute text copied from them.
 
 For relevant startup or transfer symptoms, use `pi_sync_debug` with `latest` if the tool is available. It reads bounded summaries from the [private local log](references/configuration.md#shared-log) without contacting the daemon. Report only relevant outcomes, never raw log lines. Missing records do not rule out a failure; do not enable Debug mode or start a transfer just to collect evidence.
-If the user requests a fresh comparison, use `pi_sync_debug` with `recheck` only when available. Pi asks the user before reading remote metadata and sending a summary to the model. If it is unavailable or the user declines, do not use another tool to make the read. Point the user to **View differences** for a manual file comparison.
+If the user requests a fresh comparison, use `pi_sync_debug` with `recheck` only when available. It reads the configured remote and returns a sanitized summary without a confirmation prompt. If it is unavailable, do not use another tool to make the read. Point the user to **View differences** for a manual file comparison.
 
 Leave operations that Pi Sync requires the user to review in `/sync`, including initial setup, credential and destination changes, reviewed legacy path selection and policy changes, session opt-in, secret-scan bypass, enabling automatic behavior, upgrading the settings document to enable a [transfer size limit](references/configuration.md#transfer-size-limits), and remote policy publication.
 Use the masked credential input in Pi; do not infer transfer or model consent from a settings edit.

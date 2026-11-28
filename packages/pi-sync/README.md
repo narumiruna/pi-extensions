@@ -183,7 +183,7 @@ Legacy directory scope selects all eligible files, applies `exclude`, then resto
 
 ### Debug mode
 
-Turn on **/sync → Settings → Debug mode**, or set the top-level `"debug": true` in `pi-sync.json`. The default is **Off**. Use `/reload` or start a new Pi session for the client change. The daemon uses the agent directory's setting at its next owner or job boundary without a restart.
+Turn on **/sync → Settings → Debug mode**, or set the top-level `"debug": true` in `pi-sync.json`. The default is **Off**. Use `/reload` or start a new Pi session for the client change. The daemon uses the agent directory's setting at its next owner or job boundary without a restart. In TUI and RPC, Debug mode also lets the model [recheck remote storage without a confirmation prompt](#-tools).
 
 Both processes append startup timings and selected check and transfer outcomes to the private, local-only `<getAgentDir()>/pi-sync.log` (normally `~/.pi/agent/pi-sync.log`). It uses one JSON record per line; filter by `source` (`pi-sync` or `pi-sync-daemon`). Records omit raw errors, credentials, file contents, and model data. Turning Debug mode Off does not remove the file, and nothing rotates it automatically.
 
@@ -364,10 +364,10 @@ Review [Settings](#-settings) for included-content privacy and [Manager, conflic
 
 ## 🛠️ Tools
 
-Start Pi or use `/reload` with [Debug mode](#debug-mode) enabled in TUI or RPC to make `pi_sync_debug` available. Pi's tool allowlist still applies. The tool is not available in print or JSON. Ask Pi to explain the last sync check or request a new comparison:
+Start Pi or use `/reload` with [Debug mode](#debug-mode) enabled in TUI or RPC to make `pi_sync_debug` available. Pi's tool allowlist still applies. The model can call it directly or use `tools.pi_sync_debug({ action: "latest" })` in `codemode` on Pi versions that support it. In `codemode.mode: "only"`, it is available only through scripts. It is not available in print or JSON.
 
 - `latest` reads the most recent matching summary from the last 64 KiB of the private log. The result is historical; no record does not mean sync is clean. This action never starts or contacts the daemon.
-- `recheck` asks for approval to read the configured remote and return a summary to the model. A legacy snapshot may need to be read to compare its content selection. Declining, cancelling, or having no confirmation UI makes no remote request.
+- `recheck` reads the current setup's remote storage and returns a summary to the model **without a confirmation prompt**. A legacy snapshot may need to be read to compare its content selection. Leave Debug mode off if you do not want the model to have this access.
 
 The tool returns bounded summaries, not raw log lines, credentials, paths, storage addresses, file contents, or raw errors. It does not publish, apply, probe writes, or repair History. Enabling the tool starts no new background checks.
 

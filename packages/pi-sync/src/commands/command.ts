@@ -257,7 +257,7 @@ export function usage() {
     "Usage: /sync <command>",
     `Commands: ${commands}`,
     "In the /sync manager, Push to remote and Pull from remote use the chosen source and preserve a restore point without a second confirmation. Direct commands retain their existing review and flags.",
-    "To review file differences without transferring files, use /sync diff. For check summaries or a confirmed recheck, start or /reload Pi with Debug mode enabled and ask Pi to use pi_sync_debug.",
+    "To review file differences without transferring files, use /sync diff. For check summaries or a fresh read-only recheck, start or /reload Pi with Debug mode enabled and ask Pi to use pi_sync_debug.",
     "Daemon diagnostics: /sync daemon status shows service status. /sync daemon recover reviews and stops the existing daemon without starting a replacement or retrying a transfer.",
     `Automatic sync: ${AUTOMATIC_SYNC_DESCRIPTION}`,
     `Startup transfer: ${STARTUP_TRANSFER_DESCRIPTION}`,
