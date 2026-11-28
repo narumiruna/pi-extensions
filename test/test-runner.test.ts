@@ -27,6 +27,7 @@ interface Invocation {
 }
 interface Runner {
   runTests(options: {
+    args: string[];
     root: string;
     env: NodeJS.ProcessEnv;
     execute: (command: string, args: string[], options: Invocation["options"]) => CommandResult;
@@ -54,8 +55,9 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(root, { force: true, recursive: true }));
 
-function run(env: NodeJS.ProcessEnv = {}, results: CommandResult[] = []) {
+function run(env: NodeJS.ProcessEnv = {}, results: CommandResult[] = [], args: string[] = []) {
   return runner.runTests({
+    args,
     root,
     env,
     execute(command, args, options) {
@@ -320,14 +322,18 @@ function git(args: string[]) {
   ).trim();
 }
 
-for (const changedFile of ["test/example.test.ts", "packages/base/src/index.ts", "scripts/shared.mjs"]) {
-  test(`selection retains affected filters and delegates full discovery (${changedFile})`, () => {
-    for (const name of ["base", "consumer", "unrelated"]) {
+for (const [changedFile, expected] of [
+  ["test/example.test.ts", []],
+  ["packages/pi-base/src/index.ts", ["pi-base", "pi-consumer"]],
+  ["scripts/shared.mjs", ["pi-base", "pi-consumer", "pi-unrelated"]],
+] as const) {
+  test(`local and CI selection cover the same groups (${changedFile})`, () => {
+    for (const name of ["pi-base", "pi-consumer", "pi-unrelated"]) {
       mkdirSync(path.join(root, "packages", name, "test"), { recursive: true });
       writeFileSync(path.join(root, "packages", name, "test/example.test.ts"), "// fixture\n");
       writeFileSync(
         path.join(root, "packages", name, "package.json"),
-        JSON.stringify({ name, version: "1.0.0", dependencies: name === "consumer" ? { base: "*" } : {} }),
+        JSON.stringify({ name, version: "1.0.0", dependencies: name === "pi-consumer" ? { "pi-base": "*" } : {} }),
       );
     }
     git(["init", "-q"]);
@@ -344,12 +350,64 @@ for (const changedFile of ["test/example.test.ts", "packages/base/src/index.ts",
         ? []
         : [
             path.join(root, "test/example.test.ts"),
-            ...(changedFile.startsWith("packages/")
-              ? ["base", "consumer"].map((name) => path.join(root, "packages", name, "test/example.test.ts"))
-              : []),
+            ...expected.map((name) => path.join(root, "packages", name, "test/example.test.ts")),
           ];
     assert.deepEqual(calls.at(-1)?.args, [path.join(root, "node_modules/vitest/vitest.mjs"), "run", ...filters]);
     assert.equal(calls.length, 3);
+
+    calls.length = 0;
+    const output = path.join(root, "outputs");
+    assert.equal(
+      run(
+        { GITHUB_OUTPUT: output, PI_EXTENSIONS_BUILD_READY: "1", PI_EXTENSIONS_TEST_BASE: base },
+        [],
+        ["--prepare-ci"],
+      ),
+      0,
+    );
+    assert.deepEqual(
+      calls.map(({ args }) => args.at(-1)),
+      ["tsconfig.test.json"],
+    );
+    assert.equal(readFileSync(output, "utf8"), `test-root=true\npackages=${JSON.stringify(expected)}\n`);
+  });
+}
+
+test("CI preparation keeps compilation failures fatal and publishes no plan", () => {
+  const output = path.join(root, "outputs");
+  assert.equal(run({ GITHUB_OUTPUT: output, PI_EXTENSIONS_BUILD_READY: "1" }, [{ status: 23 }], ["--prepare-ci"]), 23);
+  assert.equal(calls.length, 1);
+  assert.equal(existsSync(output), false);
+});
+
+for (const [shard, directory] of [
+  ["root", "test"],
+  ["pi-base", "packages/pi-base/test"],
+] as const) {
+  test(`CI shard ${shard} only runs Vitest and leaves restored inputs intact`, () => {
+    mkdirSync(path.join(root, directory), { recursive: true });
+    writeFileSync(path.join(root, directory, "example.test.ts"), "// fixture\n");
+    const compiled = path.join(root, "node_modules/.cache/pi-extensions-test");
+    mkdirSync(compiled, { recursive: true });
+    writeFileSync(path.join(compiled, "fixture.js"), "// compiled\n");
+    assert.equal(run({}, [{ status: 31 }], ["--ci-shard", shard]), 31);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0]?.args, [path.join(root, "node_modules/vitest/vitest.mjs"), "run"]);
+    assert.equal(calls[0]?.options.env.PI_EXTENSIONS_TEST_DIRECTORY, directory);
+    assert.ok(existsSync(path.join(compiled, "fixture.js")));
+  });
+}
+
+for (const args of [
+  ["--ci-shard", "root"],
+  ["--ci-shard", "pi-missing"],
+  ["--ci-shard", "../root"],
+  ["--prepare-ci"],
+]) {
+  test(`CI rejects missing artifacts, invalid shards, or missing outputs (${args.join(" ")})`, () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    assert.equal(run({}, [], args), 1);
+    assert.equal(calls.length, 0);
   });
 }
 
@@ -362,18 +420,91 @@ test("documentation-only changes skip all commands", () => {
   git(["add", "README.md"]);
   git(["commit", "-qm", "fixture docs"]);
   assert.equal(run({ PI_EXTENSIONS_TEST_BASE: base }), 0);
+  const output = path.join(root, "outputs");
+  assert.equal(run({ GITHUB_OUTPUT: output, PI_EXTENSIONS_TEST_BASE: base }, [], ["--prepare-ci"]), 0);
   assert.equal(calls.length, 0);
+  assert.equal(readFileSync(output, "utf8"), "test-root=false\npackages=[]\n");
 });
 
-test("CI reuses build output only after the separate successful check gate", () => {
+test("CI compiles only after the separate successful check gate", () => {
   const manifest = JSON.parse(readFileSync(path.join(repositoryRoot, "package.json"), "utf8"));
   assert.match(manifest.scripts.check, /^npm run build && /u);
   assert.equal((manifest.scripts.check.match(/npm run build/gu) ?? []).length, 1);
   const workflow = readFileSync(path.join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
-  const [before, tests = ""] = workflow.split("      - name: Run affected tests\n");
+  const [before, tests = ""] = workflow.split("      - name: Select and compile tests\n");
   assert.match(before ?? "", /- name: Run checks\s+run: npm run check/u);
   assert.doesNotMatch(before ?? "", /PI_EXTENSIONS_BUILD_READY|continue-on-error/u);
   assert.match(tests, /env:\s+PI_EXTENSIONS_BUILD_READY: "1"/u);
-  assert.match(tests, /run: npm test/u);
-  assert.doesNotMatch(tests, /always\(|continue-on-error/u);
+  assert.match(tests, /run: npm test -- --prepare-ci/u);
+  assert.match(tests, /run: npm test -- --ci-shard root/u);
+  assert.match(tests, /run: npm test -- --ci-shard "\$TEST_PACKAGE"/u);
+  assert.doesNotMatch(workflow, /continue-on-error/u);
+});
+
+test.skipIf(process.platform !== "linux")(
+  "CI artifact restore replaces prepare outputs without deleting siblings",
+  () => {
+    const workflow = readFileSync(path.join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
+    const restore = workflow.split("      - &restore\n")[1]?.split("\n      - ")[0];
+    const command = restore?.match(/^ {8}run: (.+)$/mu)?.[1];
+    assert.ok(command);
+
+    const dist = path.join(root, "packages/pi-base/dist");
+    const executable = path.join(dist, "cli.js");
+    const buildId = path.join(dist, ".build-id");
+    const leftover = path.join(dist, "install-only.js.map");
+    const sibling = path.join(dist, "../package.json");
+    mkdirSync(dist, { recursive: true });
+    writeFileSync(executable, "built", { mode: 0o755 });
+    writeFileSync(buildId, "build ID");
+    execFileSync("tar", ["-czf", path.join(root, "ci-test-inputs.tar.gz"), "--", "packages/pi-base/dist"], {
+      cwd: root,
+    });
+    rmSync(dist, { recursive: true });
+    mkdirSync(dist);
+    writeFileSync(executable, "prepared", { mode: 0o644 });
+    writeFileSync(leftover, "prepare-only output");
+    writeFileSync(sibling, "manifest");
+
+    execFileSync("bash", ["-e", "-c", command], { cwd: root, env: { ...process.env, RUNNER_TEMP: root } });
+    assert.equal(readFileSync(executable, "utf8"), "built");
+    assert.ok(fs.statSync(executable).mode & 0o111);
+    assert.equal(readFileSync(buildId, "utf8"), "build ID");
+    assert.equal(existsSync(leftover), false);
+    assert.equal(readFileSync(sibling, "utf8"), "manifest");
+  },
+);
+
+test.skipIf(process.platform === "win32")("required CI check rejects failures and unexpected skips", () => {
+  const workflow = readFileSync(path.join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
+  const gate = workflow.slice(workflow.indexOf("\n  ci:\n"));
+  assert.match(gate, /name: ci\n {4}needs: \[check, test-root, test-package\]\n {4}if: always\(\)/u);
+  const script = gate.split("        run: |\n")[1];
+  assert.ok(script);
+  for (const [check, root, packages, testRoot, plan, status] of [
+    ["success", "success", "success", "true", '["pi-base"]', 0],
+    ["success", "success", "skipped", "true", "[]", 0],
+    ["success", "skipped", "skipped", "false", "[]", 0],
+    ["failure", "skipped", "skipped", "", "", 1],
+    ["cancelled", "skipped", "skipped", "false", "[]", 1],
+    ["success", "failure", "success", "true", '["pi-base"]', 1],
+    ["success", "skipped", "success", "true", '["pi-base"]', 1],
+    ["success", "success", "failure", "true", '["pi-base"]', 1],
+    ["success", "success", "cancelled", "true", '["pi-base"]', 1],
+    ["success", "success", "skipped", "true", '["pi-base"]', 1],
+    ["success", "success", "skipped", "true", "", 1],
+  ] as const) {
+    const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", script], {
+      env: {
+        ...process.env,
+        CHECK_RESULT: check,
+        ROOT_RESULT: root,
+        PACKAGE_RESULT: packages,
+        TEST_ROOT: testRoot,
+        PACKAGES: plan,
+      },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, status, `${[check, root, packages, testRoot, plan].join(", ")}: ${result.stderr}`);
+  }
 });

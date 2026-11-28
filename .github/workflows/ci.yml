@@ -20,31 +20,120 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci:
-    name: ci
+  check:
+    name: check
     runs-on: ubuntu-latest
+    outputs:
+      test-root: ${{ steps.tests.outputs.test-root }}
+      packages: ${{ steps.tests.outputs.packages }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
 
     steps:
-      - name: Check out repository
+      - &checkout
+        name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up Node.js
+      - &setup-node
+        name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
           cache: npm
 
-      - name: Install dependencies
+      - &install
+        name: Install dependencies
         run: npm ci
 
       - name: Run checks
         run: npm run check
 
-      - name: Run affected tests
+      - name: Select and compile tests
+        id: tests
         env:
           PI_EXTENSIONS_BUILD_READY: "1"
           PI_EXTENSIONS_TEST_BASE: ${{ inputs.test-base || github.event.pull_request.base.sha || github.event.before }}
-        run: npm test
+        run: npm test -- --prepare-ci
+
+      - name: Archive test inputs
+        if: steps.tests.outputs.test-root == 'true' || steps.tests.outputs.packages != '[]'
+        run: >-
+          tar -czf "$RUNNER_TEMP/ci-test-inputs.tar.gz" --
+          packages/*/dist packages/pi-inspect/browser-dist packages/pi-sync-daemon/.daemon-build.json
+          node_modules/.cache/pi-extensions-test
+
+      - name: Upload test inputs
+        id: upload
+        if: steps.tests.outputs.test-root == 'true' || steps.tests.outputs.packages != '[]'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-test-inputs-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-test-inputs.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  test-root:
+    name: test-root
+    needs: check
+    if: needs.check.outputs.test-root == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - *checkout
+      - *setup-node
+      - *install
+      - &download
+        name: Download test inputs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.check.outputs.artifact-id || 'missing-ci-test-inputs-id' }}
+          path: ${{ runner.temp }}
+          merge-multiple: true
+      - &restore
+        name: Restore test inputs
+        # Replace generated directories; npm ci's prepare hook can leave files not in the archive.
+        run: tar -xzf "$RUNNER_TEMP/ci-test-inputs.tar.gz" --recursive-unlink
+      - name: Run root tests
+        run: npm test -- --ci-shard root
+
+  test-package:
+    name: test-package (${{ matrix.package }})
+    needs: check
+    if: needs.check.outputs.packages != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.check.outputs.packages) }}
+    steps:
+      - *checkout
+      - *setup-node
+      - *install
+      - *download
+      - *restore
+      - name: Run package tests
+        env:
+          TEST_PACKAGE: ${{ matrix.package }}
+        run: npm test -- --ci-shard "$TEST_PACKAGE"
+
+  ci:
+    name: ci
+    needs: [check, test-root, test-package]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all planned jobs to pass
+        env:
+          CHECK_RESULT: ${{ needs.check.result }}
+          ROOT_RESULT: ${{ needs.test-root.result }}
+          PACKAGE_RESULT: ${{ needs.test-package.result }}
+          TEST_ROOT: ${{ needs.check.outputs.test-root }}
+          PACKAGES: ${{ needs.check.outputs.packages }}
+        shell: bash
+        run: |
+          printf 'check=%s test-root=%s test-package=%s\n' "$CHECK_RESULT" "$ROOT_RESULT" "$PACKAGE_RESULT"
+          [[ $CHECK_RESULT == success ]]
+          [[ ( $TEST_ROOT == true && $ROOT_RESULT == success ) || ( $TEST_ROOT == false && $ROOT_RESULT == skipped ) ]]
+          [[ -n $PACKAGES ]]
+          [[ ( $PACKAGES != '[]' && $PACKAGE_RESULT == success ) || ( $PACKAGES == '[]' && $PACKAGE_RESULT == skipped ) ]]

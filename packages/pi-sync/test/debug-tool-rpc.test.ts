@@ -229,25 +229,28 @@ describe("existing startup checks with Debug mode", () => {
   });
 
   test("records the existing remote check without an agent call or publication", async () => {
-    const report = await vi.waitUntil(
-      () =>
-        client.records.find(
+    const checks = await vi.waitFor(
+      async () => {
+        const report = client.records.find(
           ({ type, method, message }) =>
             type === "extension_ui_request" &&
             method === "notify" &&
             typeof message === "string" &&
             message.startsWith("pi-sync debug: background startup"),
-        ),
-      { timeout: 4_000, message: "Pi RPC did not report background startup completion" },
+        );
+        assert.ok(report, "Pi RPC did not report background startup completion");
+        assert.match(String(report.message), /^pi-sync debug: background startup \(completed\)\n/u);
+        const log = await fs.readFile(path.join(fixture.agent, "pi-sync.log"), "utf8");
+        const recorded = log
+          .trimEnd()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+          .filter((event) => event.event === "check");
+        assert.equal(recorded.length, 1, "Expected one startup check in the daemon's debug log");
+        return recorded;
+      },
+      { timeout: 4_000 },
     );
-    assert.match(String(report.message), /^pi-sync debug: background startup \(completed\)\n/u);
-    const log = await fs.readFile(path.join(fixture.agent, "pi-sync.log"), "utf8");
-    const checks = log
-      .trimEnd()
-      .split("\n")
-      .map((line) => JSON.parse(line))
-      .filter((event) => event.event === "check");
-    assert.equal(checks.length, 1);
     assert.equal(checks[0].origin, "startup");
     assert.equal(checks[0].summary.outcome, "checked");
     assert.deepEqual(

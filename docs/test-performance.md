@@ -9,9 +9,8 @@ The historical isolation study reduced its local median from 241.39 to 174.54 se
 Its 11,209 passing cases included 42 added regressions, with two intentional skips. Those older
 measurements describe a smaller inventory and must not be compared directly with the current suite.
 
-`npm test` reports build, test compilation, and Vitest subprocess elapsed time separately. CI reuses
-build output only after `npm run check` succeeds in the same job. Standalone `npm test` still builds.
-The two verification gates remain separate, and a failed prerequisite stops the pipeline.
+Standalone `npm test` builds prerequisites and reports build, test compilation, and Vitest subprocess
+elapsed time separately. `npm run check` and `npm test` remain separate verification gates.
 
 The additive Vitest reporter saves all file and package measurements to
 `node_modules/.cache/pi-extensions-test-report.json`. The console shows only the five largest
@@ -25,6 +24,25 @@ Failed and interrupted runs retain their result in the report. The runner attemp
 data before prerequisites; the reporter also clears previous data on start. A cleanup or publication
 failure warns without replacing a failing test's exit code. Treat the old report as stale if cleanup
 fails.
+
+## GitHub Actions test jobs
+
+All jobs live in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). The `check` job runs
+`npm run check` once. On success, `npm test -- --prepare-ci` selects tests and compiles test support
+once if there is work to run. The selection includes root integration tests and changed workspaces
+plus their local consumers. Shared test inputs or an unusable base select the full suite. Changes
+that do not affect tests skip compilation, the artifact, and the test jobs.
+
+`test-root` and the package matrix run in parallel. Each runner installs the lockfile dependencies,
+then replaces generated outputs with the same run's archived build output and compiled test support.
+This removes files created only by npm's `prepare` hook. `npm test -- --ci-shard <root|package-directory>`
+runs Vitest without rebuilding or recompiling. The projects retain their existing isolation rules.
+The required check named `ci` passes only when `check` and every selected test job pass. It accepts
+skips only when no work was selected for that job. If the shared artifact has expired, rerun all
+jobs so `check` can recreate it.
+
+Compare matching hosted runs before claiming a speedup. Measure the time until `ci` finishes as
+well as total runner use; setup and install cost can outweigh parallelism for a small change.
 
 ## Native bytecode cache
 

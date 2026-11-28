@@ -20,7 +20,8 @@ test("pull request CI retains both checks and tests", () => {
   const ci = readFileSync(path.join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
   assert.match(ci, /^ {2}pull_request:\n {4}branches:\n {6}- main$/mu);
   assert.match(ci, /^ {8}run: npm run check$/mu);
-  assert.match(ci, /^ {8}run: npm test$/mu);
+  assert.match(ci, /^ {8}run: npm test -- --ci-shard root$/mu);
+  assert.match(ci, /^ {8}run: npm test -- --ci-shard "\$TEST_PACKAGE"$/mu);
 });
 
 test("version workflow checks the effective release plan before creating or updating a PR", () => {
