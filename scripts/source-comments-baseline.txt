@@ -2043,7 +2043,6 @@
 "packages/pi-sync-daemon/src/engine/ui/terminal-text.ts"	6aff17e32a069946c75fb88fa0ac9061869ee37fa7f9aba94c6ee772c6a3df4a
 "packages/pi-sync-daemon/src/engine/ui/terminal-text.ts"	da614f878615da37d92dd57b916c2f6b80cda69e48d5a99e45640ef82058935a
 "packages/pi-sync-daemon/src/engine/ui/transfer-changes.ts"	96d8fb3ca5ca42c366af72bbfe9a6056f2e3a30ffee03a87cb8ab0f52ba300a1
-"packages/pi-sync-daemon/src/engine/ui/transfer-review.ts"	733367f7e34a47ed3a412bbcb879c18169c0effe8632285e1e5d2ff9bd7ed0d8
 "packages/pi-sync-daemon/src/identity.ts"	09553d5c4bc1e084a74ae079df034dc287d20acae4d3eb881973edbef8442431
 "packages/pi-sync-daemon/src/identity.ts"	1f9c984e529cb0e839cacc3c2938a90ab94d16f884e05ebc61320a932d8d068d
 "packages/pi-sync-daemon/src/identity.ts"	4c1fa0ed1eccd1d478f16471c56b966355cbaebc9d9911190f68838372fb0286
@@ -2192,7 +2191,6 @@
 "packages/pi-sync/src/ui/merge-review.ts"	a00de157ee200f53c463232da40727ff5f8e0a43d492a578685f9d065a87ca45
 "packages/pi-sync/src/ui/merge-review.ts"	df96d1c6e8e483dbbedae35cdd410e7c1572dfe1e08dc9c62402a487c768beff
 "packages/pi-sync/src/ui/merged-sync-summary.ts"	7cc5f43aaa2ca7c95ed47d251dd156e4de3f198efde1ec25b964bc92a2c65fa7
-"packages/pi-sync/src/ui/operation-dialogs.ts"	01c9dc7e4fe7c2f2cb72985dd291a5f76861ebe4ccebb4968243609dec40eaed
 "packages/pi-sync/src/ui/operation-dialogs.ts"	1a037057ed97464dda63cefc7ec714807d408fd007a6b0f6be0c150ba03d1996
 "packages/pi-sync/src/ui/operation-dialogs.ts"	e0887f9ac1007933bab8abfe32d8662514958eba24f1e643fd32c9810a3d87fb
 "packages/pi-sync/src/ui/remote-selection-ui.ts"	411f11926be558827a6127deb68b0717dd09d79b49502cf25e15f84590aa84bb

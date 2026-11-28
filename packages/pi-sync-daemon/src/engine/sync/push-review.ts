@@ -37,6 +37,7 @@ export async function confirmPush(
     formatTransferReview(summary),
     options.signal,
     validateMutation,
+    options.directionalAction?.intent === "review-force",
   );
   throwIfAborted(options.signal);
   if (confirmed) return true;

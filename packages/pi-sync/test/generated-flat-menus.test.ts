@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -14,6 +14,7 @@ import { beforeEach, describe, test } from "vitest";
 import { bindMockToolLoadout, createMockContext } from "../../../test/support.js";
 import { WebDavSyncBackend } from "../src/backends/webdav/webdav-backend.js";
 import { loadConfig } from "../src/settings/config.js";
+import { writeStateForConfig } from "../src/state/sync-state-store.js";
 import { readClientDebug } from "./client-debug-records.js";
 import { snapshot, v3WebDavSettings } from "./helpers.js";
 import { MockWebDavServer } from "./mock-webdav-server.js";
@@ -27,6 +28,11 @@ const cases = [
   { name: "TUI applied Push", mode: "tui", action: "apply", direction: "push" },
   { name: "TUI size-limited Push", mode: "tui", action: "block", direction: "push" },
   { name: "RPC applied Pull", mode: "rpc", action: "apply", direction: "pull" },
+  { name: "TUI declined Force push offer", mode: "tui", action: "decline-force", direction: "push" },
+  { name: "TUI confirmed Force push", mode: "tui", action: "force", direction: "push" },
+  { name: "RPC declined Force pull preview", mode: "rpc", action: "decline-preview", direction: "pull" },
+  { name: "RPC confirmed Force pull", mode: "rpc", action: "force", direction: "pull" },
+  { name: "RPC reviewed a changed Force pull again", mode: "rpc", action: "refresh-force", direction: "pull" },
   { name: "TUI cancelled direct /sync push review", mode: "tui", action: "review-push" },
   { name: "RPC History", mode: "rpc", action: "history" },
 ] as const;
@@ -132,7 +138,29 @@ describe.each(cases)("package-directory Jiti $name", (scenario) => {
       profile: config.snapshotIdentity,
       selection: { version: 1 as const, include: ["AGENTS.md"] },
     };
-    if (direction) await backend.publishSnapshot(remote, { kind: "missing" });
+    const conflict =
+      action === "force" || action === "decline-force" || action === "decline-preview" || action === "refresh-force";
+    if (direction) {
+      const baseText = (direction === "push") !== conflict ? remoteText : localText;
+      const base =
+        baseText === remoteText
+          ? remote
+          : {
+              ...remote,
+              id: "baseline",
+              files: snapshot([{ path: "AGENTS.md", content: Buffer.from(baseText) }]).files,
+            };
+      const { head } = await backend.publishSnapshot(base, { kind: "missing" });
+      await writeStateForConfig(config, {
+        version: 1,
+        profile: config.snapshotIdentity,
+        include: ["AGENTS.md"],
+        lastAppliedSnapshot: head.snapshotId,
+        lastRemoteRevision: head.revision,
+        lastFileHashes: Object.fromEntries(base.files.map(({ path, sha256 }) => [path, sha256])),
+      });
+      if (base !== remote) await backend.publishSnapshot(remote, { kind: "revision", revision: head.revision });
+    }
     const loader = new DefaultResourceLoader({
       cwd: root,
       agentDir,
@@ -159,6 +187,10 @@ describe.each(cases)("package-directory Jiti $name", (scenario) => {
     const frames: string[] = [];
     const menus: string[] = [];
     const confirmations: string[] = [];
+    const choicesSeen: string[][] = [];
+    const lateLocalText = "edit made during the first review\n";
+    let firstApproval = false;
+    let refreshedReview = false;
     let allowHandover = false;
     let selected = false;
     let menuCountAtActivation = 0;
@@ -174,6 +206,23 @@ describe.each(cases)("package-directory Jiti $name", (scenario) => {
       },
       select: async (title: string, options: string[]) => {
         menus.push(title);
+        choicesSeen.push(options);
+        const review = `Review Force ${direction}…`;
+        if (options.includes(review)) return action === "decline-force" ? "Back" : review;
+        if (options.includes("No, cancel")) {
+          if (action === "refresh-force" && firstApproval) {
+            refreshedReview = true;
+            return "No, cancel";
+          }
+          if (action === "decline-preview") return "No, cancel";
+          const approval = options.find((option) => option.startsWith("Yes, "));
+          if (approval && action === "refresh-force") {
+            firstApproval = true;
+            await writeFile(localPath, lateLocalText);
+          }
+          return approval ?? "View details";
+        }
+        if (title.startsWith("Sync change details")) return "Back";
         if (selected || !options.includes(selectedAction)) return undefined;
         activate();
         return selectedAction;
@@ -202,6 +251,14 @@ describe.each(cases)("package-directory Jiti $name", (scenario) => {
             }
             if (!selected) tui.press("ctrl+c");
           }
+        } else if (direction && frame.includes(`${direction === "push" ? "Push" : "Pull"} stopped`)) {
+          if (action !== "decline-force") tui.press("tui.select.down");
+          tui.press("tui.select.confirm");
+        } else if (direction && frame.includes(`Force ${direction}?`)) {
+          if (action === "force") tui.press("tui.select.down");
+          tui.press("tui.select.confirm");
+        } else if (direction && frame.includes(`Preparing Force ${direction} preview…`)) {
+          // Leave the loading interaction running while the daemon requests the preview.
         } else if (frame.split("\n").includes("Pi Sync Settings")) {
           tui.send("\u001b[200~Show sync status\u001b[201~");
           frames.push(tui.render().join("\n"));
@@ -252,20 +309,29 @@ describe.each(cases)("package-directory Jiti $name", (scenario) => {
       assert.equal(selected, action !== "review-push", frames.join("\n\n"));
       assert.deepEqual(confirmations, []);
       if (direction) {
-        assert.deepEqual(menus.slice(menuCountAtActivation), []);
+        if (!conflict) assert.deepEqual(menus.slice(menuCountAtActivation), []);
         const outcome = action === "apply" ? "completed" : action === "cancel" ? "cancelled" : "failed";
         const jobs = (await readClientDebug(agentDir))
           .filter((entry) => entry.event === "job")
           .filter((entry) => entry.operation === `${direction}.foreground`);
         const id = jobs[0]?.operationId;
         assert.ok(id);
-        assert.deepEqual(
-          jobs.map((entry) => [entry.operationId, entry.outcome]),
-          [
-            [id, "started"],
-            [id, outcome],
-          ],
-        );
+        if (conflict) {
+          const expected = ["started", "blocked"];
+          if (action !== "decline-force") expected.push("started", action === "force" ? "completed" : "cancelled");
+          assert.deepEqual(
+            jobs.map((entry) => entry.outcome),
+            expected,
+          );
+        } else {
+          assert.deepEqual(
+            jobs.map((entry) => [entry.operationId, entry.outcome]),
+            [
+              [id, "started"],
+              [id, outcome],
+            ],
+          );
+        }
         assert.doesNotMatch(JSON.stringify(jobs), /AGENTS\.md|\/latest\.json|backup|fixture version/iu);
       }
       const notices = context.notifications.slice(noticeStart);
@@ -299,8 +365,24 @@ describe.each(cases)("package-directory Jiti $name", (scenario) => {
         );
         assert.equal((await backend.readHead())?.snapshotId, remote.id);
         assert.equal((await readFile(localPath)).length, 1_048_577);
-      } else if (action === "apply") {
-        if (mode === "tui") {
+      } else if (action === "apply" || conflict) {
+        if (conflict && mode === "tui") {
+          const offer = frames.find((frame) => frame.includes("Push stopped"));
+          assert.match(offer ?? "", /→ Back/u);
+          assert.match(offer ?? "", /Review Force push…/u);
+          if (action === "force")
+            assert.match(frames.find((frame) => frame.includes("Force push?")) ?? "", /→ No, cancel/u);
+        } else if (conflict) {
+          assert.deepEqual(
+            choicesSeen.find((items) => items.includes("Review Force pull…")),
+            ["Back", "Review Force pull…", "Done"],
+          );
+          if (action === "refresh-force") {
+            assert.equal(firstApproval, true);
+            assert.equal(refreshedReview, true);
+          }
+          assert.ok(choicesSeen.some((items) => items[0] === "No, cancel"));
+        } else if (mode === "tui") {
           assert.equal(frames.length, 2, frames.join("\n\n"));
           assert.ok(frames[1]?.includes(progress), frames.join("\n\n"));
         } else {
@@ -308,17 +390,26 @@ describe.each(cases)("package-directory Jiti $name", (scenario) => {
           assert.match(menus[0] ?? "", /^Manage sync\n/u);
           assert.deepEqual(frames, []);
         }
+        const applied = action === "apply" || action === "force";
         const successes = notices.filter(({ message }) => /^(Pushed|Pulled)\b/u.test(message));
-        assert.equal(successes.length, 1, JSON.stringify(notices));
-        assert.match(successes[0]?.message ?? "", direction === "push" ? /history/iu : /backup/iu);
-        assert.equal(await readFile(localPath, "utf8"), direction === "pull" ? remoteText : localText);
+        assert.equal(successes.length, Number(applied), JSON.stringify(notices));
+        if (applied) assert.match(successes[0]?.message ?? "", direction === "push" ? /history/iu : /backup/iu);
+        assert.equal(
+          await readFile(localPath, "utf8"),
+          action === "refresh-force" ? lateLocalText : applied && direction === "pull" ? remoteText : localText,
+        );
+        const backups = await readdir(join(agentDir, "pi-sync", "backups")).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return [];
+          throw error;
+        });
+        assert.equal(backups.length, Number(applied && direction === "pull"));
         const head = await backend.readHead();
         assert.ok(head);
         assert.equal(
           requests.filter(({ method, path }) => method === "PUT" && path.endsWith("/latest.json")).length,
-          direction === "push" ? 1 : 0,
+          applied && direction === "push" ? 1 : 0,
         );
-        if (direction === "push") {
+        if (applied && direction === "push") {
           assert.notEqual(head.snapshotId, remote.id);
           const pushed = await backend.readSnapshot(head.snapshotId);
           assert.equal(Buffer.from(pushed.files[0]?.contentBase64 ?? "", "base64").toString(), localText);
@@ -342,7 +433,7 @@ describe.each(cases)("package-directory Jiti $name", (scenario) => {
         assert.ok(requests.length > 0);
       }
       assert.equal(await readFile(settingsPath, "utf8"), bytes);
-      if (action !== "apply" || direction === "pull") {
+      if ((action !== "apply" && action !== "force") || direction === "pull") {
         assert.deepEqual(server.resources, before);
         assert.ok(
           requests.every(({ method }) => method === "GET" || method === "PROPFIND"),
@@ -352,7 +443,7 @@ describe.each(cases)("package-directory Jiti $name", (scenario) => {
     };
   });
 
-  test("preserves flat navigation and requires no second action for a manager transfer", async () => {
+  test("preserves flat navigation and reviews Force only after a conflict", async () => {
     await run();
   });
 });

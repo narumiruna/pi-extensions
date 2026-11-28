@@ -970,6 +970,7 @@ export class PiDaemonClient {
             () => {
               this.cleanupRequired = true;
             },
+            !(intent && typeof intent === "object" && "intent" in intent && intent.intent === "review-force"),
           )
         : await connection.run(operation, payload, runSignal, onCommit, diagnostics?.onSubmit);
       diagnostics?.returned(result, runSignal.aborted || reload?.signal.aborted);

@@ -67,20 +67,37 @@ export async function showSyncManager(
   const directionalAction = async (direction: "push" | "pull", state: State, signal: AbortSignal) => {
     const review = state.manager.configReview;
     if (!review) return { kind: "stay" as const };
-    const result = await runCancellableOperation(
-      ctx,
-      direction === "push" ? "Pushing to remote…" : "Pulling from remote…",
-      direction,
-      runRoute,
-      {
-        commitAware: true,
-        cancelledMessage: direction === "push" ? "Push cancellation requested." : "Pull cancellation requested.",
-        target: review.setupName,
-        directionalFingerprint: review.fingerprint,
-        signal,
-        isCurrent,
-      },
-    );
+    const run = (intent: "reject-conflicts" | "review-force") =>
+      runCancellableOperation(
+        ctx,
+        intent === "review-force"
+          ? `Preparing Force ${direction} preview…`
+          : direction === "push"
+            ? "Pushing to remote…"
+            : "Pulling from remote…",
+        direction,
+        runRoute,
+        {
+          commitAware: true,
+          cancelAcrossDialogs: intent === "review-force",
+          cancelledMessage: direction === "push" ? "Push cancellation requested." : "Pull cancellation requested.",
+          target: review.setupName,
+          directional: { fingerprint: review.fingerprint, intent },
+          signal,
+          isCurrent,
+        },
+      );
+    let result = await run("reject-conflicts");
+    if (signal.aborted || !isCurrent()) return { kind: "close" as const };
+    if (result.kind === "destination-conflict") {
+      const choice = await showDirectionalConflict(menuContext, direction, review.setupName, signal, isCurrent);
+      if (signal.aborted || !isCurrent() || choice === "close") return { kind: "close" as const };
+      if (choice === "back") return { kind: "stay" as const };
+      if (!(await matchesManagerReview(review.fingerprint, signal)))
+        return { kind: signal.aborted || !isCurrent() ? ("close" as const) : ("stay" as const) };
+      result = await run("review-force");
+      if (signal.aborted || !isCurrent()) return { kind: "close" as const };
+    }
     const done =
       result.kind === "closed" ||
       (result.kind === "completed" && result.outcome === "applied") ||
@@ -246,6 +263,21 @@ export async function showSyncManager(
       },
     },
   });
+  async function matchesManagerReview(fingerprint: string | undefined, signal: AbortSignal, settings = false) {
+    try {
+      const config = await (settings ? loadSettingsConfig() : loadConfig());
+      validateOwner();
+      signal.throwIfAborted();
+      if (fingerprint === syncCheckConfigFingerprint(config)) return true;
+    } catch {
+      if (!isCurrent() || signal.aborted) return false;
+    }
+    ctx.ui.notify(
+      "Sync setup changed while the manager was open. Review the refreshed setup before continuing.",
+      "warning",
+    );
+    return false;
+  }
   // Setup-specific actions must use the configuration shown by this screen, not
   // an active setup selected by another process while the menu was open.
   for (const action of [
@@ -262,23 +294,9 @@ export async function showSyncManager(
     menu.actions[action] = async (invocation) => {
       validateOwner();
       const review = invocation.state.manager.configReview;
-      let current = false;
-      try {
-        const config = await (action === "settings" ? loadSettingsConfig() : loadConfig());
-        validateOwner();
-        invocation.signal.throwIfAborted();
-        current = review?.fingerprint === syncCheckConfigFingerprint(config);
-      } catch {
-        if (!isCurrent() || invocation.signal.aborted) return { kind: "close" };
-      }
-      if (!current) {
-        ctx.ui.notify(
-          "Sync setup changed while the manager was open. Review the refreshed setup before continuing.",
-          "warning",
-        );
-        return { kind: "stay" };
-      }
-      return activate(invocation);
+      const matches = await matchesManagerReview(review?.fingerprint, invocation.signal, action === "settings");
+      if (invocation.signal.aborted || !isCurrent()) return { kind: "close" };
+      return matches ? activate(invocation) : { kind: "stay" };
     };
   }
   const menuContext: ExtensionCommandContext = {
@@ -332,6 +350,47 @@ export async function showSyncManager(
   });
 }
 
+async function showDirectionalConflict(
+  ctx: ExtensionCommandContext,
+  direction: "push" | "pull",
+  setup: string,
+  signal: AbortSignal,
+  isCurrent: () => boolean,
+): Promise<"review" | "back" | "close"> {
+  let selected = false;
+  const menu = defineMenu<undefined, "conflict", "choose", ExtensionCommandContext>({
+    start: "conflict",
+    screens: {
+      conflict: () => ({
+        kind: "choice",
+        title: `${direction === "push" ? "Push" : "Pull"} stopped · ${safeTerminalText(setup)}`,
+        lines: [
+          direction === "push"
+            ? "Push would overwrite remote changes since the last accepted sync."
+            : "Pull would overwrite local changes since the last accepted sync.",
+          "No content was written.",
+        ],
+        items: [
+          { id: "back", label: "Back" },
+          { id: "review", label: `Review Force ${direction}…` },
+        ],
+        action: "choose",
+        initialItemId: "back",
+        hint: ctx.mode === "rpc" ? "close" : "back",
+      }),
+    },
+    actions: {
+      choose: ({ itemId }) => {
+        selected = itemId === "review";
+        return { kind: "back" };
+      },
+    },
+  });
+  const result = await runMenu(ctx, menu, { getState: () => undefined, signal, isCurrent });
+  if (signal.aborted || !isCurrent() || result.kind !== "closed" || result.reason === "close") return "close";
+  return selected ? "review" : "back";
+}
+
 function syncMainMenuItem(
   label: string,
 ): ActionMenuItem<
@@ -378,8 +437,8 @@ function syncMainMenuItem(
     action,
     description: {
       sync: "Merge changes on both sides.",
-      pull: "Remote → this device; replaces conflicting local files.",
-      push: "This device → remote; replaces conflicting remote files.",
+      pull: "Remote → this device; stops before overwriting local changes.",
+      push: "This device → remote; stops before overwriting remote changes.",
       diff: "Inspect changes; no transfer.",
       settings: "Edit settings, setups, and storage connections.",
       history: "Review snapshots and recovery options.",

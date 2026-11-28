@@ -82,7 +82,7 @@ export function rawSnapshotHashIdentity(snapshot: { files: readonly SnapshotFile
     .digest("hex");
 }
 
-function stateHashMapForConfig(state: SyncState, config: SyncPolicyConfig) {
+export function stateHashMapForConfig(state: SyncState, config: SyncPolicyConfig) {
   const includePaths = customIncludePathsByLower(includeFromSelectionConfig(config));
   const configured = configuredSnapshotPathMatcher(config);
   return Object.fromEntries(

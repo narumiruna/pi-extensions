@@ -115,6 +115,8 @@ test.each([
   ["push.foreground", { foregroundQueueCleanup: "before-mutation" }, "blocked"],
   ["pull.foreground", { foregroundQueueCleanup: "verified-result", result: { outcome: "applied" } }, "completed"],
   ["push.foreground", { foregroundQueueCleanup: "verified-result", result: { outcome: "cancelled" } }, "cancelled"],
+  ["push.foreground", { outcome: "destination-conflict" }, "blocked"],
+  ["pull.foreground", { outcome: "destination-conflict" }, "blocked"],
   ["pull.foreground", { outcome: "unknown" }, "failed"],
   ["pull", "cancelled", "cancelled"],
   ["sync", { outcome: "applied" }, undefined],

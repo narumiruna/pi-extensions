@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { isForegroundDirection, isForegroundQueueOutcome } from "../foreground-queue-outcome.js";
+import { isDestinationConflict } from "../foreground-transfer.js";
 import { record } from "../protocol.js";
 import { type DebugCheckEvent, validateDebugCheckSummary } from "./debug-check.js";
 import { DEBUG_LOG_FILENAME } from "./paths.js";
@@ -85,6 +86,7 @@ export function debugJobResult(
     if (result.foregroundQueueCleanup !== "verified-result") return "blocked";
     result = result.result;
   }
+  if (isDestinationConflict(result)) return "blocked";
   if (result && typeof result === "object" && "outcome" in result) {
     if (result.outcome === "applied") return "completed";
     if (result.outcome === "cancelled") return "cancelled";

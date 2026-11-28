@@ -13,6 +13,7 @@ import type { EngineContext } from "./engine/host.js";
 import { retiredIgnorePolicy } from "./engine/settings/retired-ignore-policy.js";
 import { assertNoRetiredRuleJournal } from "./engine/settings/retired-ignore-recovery.js";
 import { captureStartupReviewLock } from "./engine/state/lock.js";
+import { isForegroundTransferIntent } from "./foreground-transfer.js";
 import { createLegacyConsentGuard } from "./legacy-consent-guard.js";
 import { type Execute, type Execution, MAX_SETTINGS_BYTES, record } from "./protocol.js";
 import type { startServer } from "./server.js";
@@ -321,7 +322,9 @@ async function runForegroundDirectional(
     !ctx.hasUI ||
     !["tui", "rpc"].includes(ctx.mode) ||
     !record(payload) ||
-    Object.keys(payload).some((key) => !["setup", "fingerprint", "retryCheckpoint"].includes(key)) ||
+    Object.keys(payload).some((key) => !["setup", "fingerprint", "retryCheckpoint", "intent"].includes(key)) ||
+    (payload.intent !== undefined && !isForegroundTransferIntent(payload.intent)) ||
+    (payload.intent === "review-force" && payload.retryCheckpoint !== undefined) ||
     typeof payload.setup !== "string" ||
     !payload.setup ||
     payload.setup.length > 512 ||
@@ -332,11 +335,14 @@ async function runForegroundDirectional(
   ) {
     throw new Error("Invalid foreground directional request.");
   }
-  const { setup, fingerprint, retryCheckpoint } = payload;
+  const { setup, fingerprint, retryCheckpoint, intent } = payload;
   const { withStateDirectoryAccess } = await import("./engine/state/state-directory.js");
   const { withLock } = await import("./engine/state/lock.js");
   const { loadConfigForCheck, syncCheckConfigFingerprint } = await import("./engine/settings/config.js");
   const operations = await import("./engine/sync/sync-operations.js");
+  const { DirectionalDestinationConflict, DirectionalReviewChangedError } = await import(
+    "./engine/sync/directional-conflict.js"
+  );
   const validate = (config: Awaited<ReturnType<typeof loadConfigForCheck>>) => {
     execution.validate();
     if (config.setupName !== setup || syncCheckConfigFingerprint(config) !== fingerprint)
@@ -359,28 +365,45 @@ async function runForegroundDirectional(
     return host.runForeground(execution, () =>
       withLock(direction, async () => {
         validate(await loadConfigForCheck(undefined, execution.signal));
+        const changedDuringRecovery = () =>
+          new Error("The transfer source or destination changed during recovery. The transfer was not replayed.");
         let message: string | undefined;
-        const outcome = await operations[direction](ctx, {
+        const options = {
           ...optionsFrom({ setup, args: [] }, execution, false),
           directionalAction: {
+            intent,
             validate,
-            async checkpoint(current) {
+            async checkpoint(current: string) {
               execution.validate();
-              if (retryCheckpoint !== undefined && retryCheckpoint !== current)
-                throw new Error(
-                  "The transfer source or destination changed during recovery. The transfer was not replayed.",
-                );
+              if (retryCheckpoint !== undefined && retryCheckpoint !== current) throw changedDuringRecovery();
               const accepted = await execution.request("directional-checkpoint", { fingerprint: current });
               if (accepted !== true)
                 throw new Error("The original transfer could not be retained for recovery. No transfer was started.");
               execution.validate();
             },
-            notifySuccess(value) {
+            notifySuccess(value: string) {
               message = value;
             },
           },
-        });
-        return { outcome, ...(message === undefined ? {} : { message }) };
+        } satisfies CommandOptions;
+        const run = async () => {
+          try {
+            const outcome = await operations[direction](ctx, options);
+            return { outcome, ...(message === undefined ? {} : { message }) };
+          } catch (error) {
+            if (intent !== "reject-conflicts" || !(error instanceof DirectionalDestinationConflict)) throw error;
+            execution.validate();
+            if (retryCheckpoint !== undefined) throw changedDuringRecovery();
+            return { outcome: "destination-conflict" };
+          }
+        };
+        try {
+          return await run();
+        } catch (error) {
+          if (intent !== "review-force" || !(error instanceof DirectionalReviewChangedError)) throw error;
+          validate(await loadConfigForCheck(undefined, execution.signal));
+          return run();
+        }
       }),
     );
   });

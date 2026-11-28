@@ -1,3 +1,4 @@
+import type { ForegroundTransferIntent } from "../../foreground-transfer.js";
 import type { AnySyncConfig } from "../settings/settings-types.js";
 import type { AgentAcceptance } from "../sync/agent-request.js";
 import type { StartupTimings } from "../sync/startup-timings.js";
@@ -24,6 +25,7 @@ export interface CommandOptions {
   agentRetryRefusal?: boolean;
   validateAgentRetryPolicy?: (config: AnySyncConfig) => void;
   directionalAction?: {
+    intent?: ForegroundTransferIntent;
     validate(config: AnySyncConfig): void;
     checkpoint?(fingerprint: string): Promise<void>;
     notifySuccess?(message: string): void;

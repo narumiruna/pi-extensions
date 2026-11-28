@@ -5,7 +5,7 @@ import { combineSignals } from "../sync/signals.js";
 import { errorMessage } from "../sync/sync-errors.js";
 import type { SyncLoaders } from "../sync/sync-loaders.js";
 import { formatRemoteSelectionMismatch } from "../sync/sync-policy.js";
-import type { RunRouteResult } from "../ui/cancellable-operation.js";
+import type { DirectionalIntent, RunRouteResult } from "../ui/cancellable-operation.js";
 import {
   observationMatchesConfig,
   type SyncAttentionController,
@@ -39,7 +39,7 @@ export async function handleCommand(
     target?: string,
     onDialog?: (active: boolean) => void,
     retryRefusal = false,
-    directionalFingerprint?: string,
+    directional?: DirectionalIntent,
   ) => {
     const [command, ...args] = splitArgs(route);
     if (command === "sync" && !retryRefusal) {
@@ -60,7 +60,7 @@ export async function handleCommand(
       target,
       onDialog,
       retryRefusal,
-      directionalFingerprint,
+      directional,
     );
   };
   if (!rawArgs.trim()) {

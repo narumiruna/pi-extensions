@@ -1,4 +1,5 @@
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isDestinationConflict } from "@narumitw/pi-sync-daemon";
 import { showDaemonStatus } from "../daemon/daemon-status-ui.js";
 import { CompletedDirectionalRecoveryError } from "../daemon/directional-recovery.js";
 import { type PiDaemonClient, piDaemonClient, remoteOperation } from "../daemon/pi-client.js";
@@ -9,7 +10,7 @@ import { syncErrorGuidance } from "../sync/sync-error-guidance.js";
 import { errorMessage, isSyncDecisionRequiredError, SetupPullRequiresUiError } from "../sync/sync-errors.js";
 import type { SyncLoaders } from "../sync/sync-loaders.js";
 import { RemoteSelectionMismatchError } from "../sync/sync-policy.js";
-import type { RunRouteResult } from "../ui/cancellable-operation.js";
+import type { DirectionalIntent, RunRouteResult } from "../ui/cancellable-operation.js";
 import { trackOperationDialogs } from "../ui/operation-dialogs.js";
 import { setSyncStatus } from "../ui/sync-status.js";
 import { safeTerminalText } from "../ui/terminal-text.js";
@@ -78,11 +79,11 @@ export async function executeCommand(
   setup?: string,
   onDialog?: (active: boolean) => void,
   retryRefusal = false,
-  directionalFingerprint?: string,
+  directional?: DirectionalIntent,
 ): Promise<RunRouteResult> {
   ctx = trackOperationDialogs(ctx, onDialog);
   try {
-    const directionalClient = directionalFingerprint === undefined ? undefined : piDaemonClient(ctx);
+    const directionalClient = directional === undefined ? undefined : piDaemonClient(ctx);
     const command = await resolveSyncCommand(rawArgs, ctx);
     if (signal?.aborted || !command) return { kind: "completed" };
     const { subcommand, rest } = command;
@@ -91,18 +92,10 @@ export async function executeCommand(
       ctx.ui.notify(retired, "warning");
       return { kind: "failed" };
     }
-    if (directionalClient && directionalFingerprint !== undefined) {
+    if (directionalClient && directional) {
       if ((subcommand !== "push" && subcommand !== "pull") || rest.length || !setup || retryRefusal)
         throw new Error("Invalid directional action.");
-      return await runDirectionalAction(
-        directionalClient,
-        ctx,
-        subcommand,
-        setup,
-        directionalFingerprint,
-        signal,
-        onCommit,
-      );
+      return await runDirectionalAction(directionalClient, ctx, subcommand, setup, directional, signal, onCommit);
     }
     const options = parseOptions(rest);
     if (setup !== undefined) options.setup = setup;
@@ -215,7 +208,7 @@ export async function executeCommand(
   } catch (error) {
     if (signal?.aborted) return { kind: "failed" };
     setSyncStatus(ctx, undefined);
-    if (directionalFingerprint !== undefined) {
+    if (directional) {
       ctx.ui.notify(safeTerminalText(errorMessage(error)).slice(0, 1200), "error");
       return { kind: "failed" };
     }
@@ -236,26 +229,32 @@ async function runDirectionalAction(
   ctx: ExtensionCommandContext,
   direction: "push" | "pull",
   setup: string,
-  fingerprint: string,
+  directional: DirectionalIntent,
   signal: AbortSignal | undefined,
   onCommit: (() => void) | undefined,
 ): Promise<RunRouteResult> {
   try {
     const operation = `${direction}.foreground`;
-    const intent = { setup, fingerprint };
-    const result = (await client.run(operation, intent, signal, ctx, onCommit)) as
-      | { outcome?: "applied" | "cancelled"; message?: string }
-      | undefined;
-    if (!client.canReportDirectionalResult() || (signal?.aborted && result?.outcome !== "applied"))
-      return { kind: "failed" };
+    const result = await client.run(operation, { setup, ...directional }, signal, ctx, onCommit);
+    if (!client.canReportDirectionalResult()) return { kind: "failed" };
     if (
-      !result ||
+      signal?.aborted &&
+      !(result && typeof result === "object" && "outcome" in result && result.outcome === "applied")
+    )
+      return { kind: "failed" };
+    if (directional.intent === "reject-conflicts" && isDestinationConflict(result))
+      return { kind: "destination-conflict" };
+    if (
+      typeof result !== "object" ||
+      result === null ||
+      !("outcome" in result) ||
       (result.outcome !== "applied" && result.outcome !== "cancelled") ||
-      (result.message !== undefined && typeof result.message !== "string")
+      ("message" in result && typeof result.message !== "string")
     ) {
       throw new Error("Invalid result from directional synchronization.");
     }
-    if (result.message) ctx.ui.notify(safeTerminalText(result.message), "info");
+    if ("message" in result && typeof result.message === "string" && result.message)
+      ctx.ui.notify(safeTerminalText(result.message), "info");
     return signal?.aborted ? { kind: "failed" } : { kind: "completed", outcome: result.outcome };
   } catch (error) {
     const completed = error instanceof CompletedDirectionalRecoveryError;
