@@ -24,6 +24,8 @@ const theme = appearanceTheme("dark");
 
 const ESC = "\u001b";
 const CTRL_C = "\u0003";
+const F4 = `${ESC}OS`;
+const F5 = `${ESC}[15~`;
 const F10 = `${ESC}[21~`;
 const F11 = `${ESC}[23~`;
 
@@ -238,6 +240,137 @@ test("the native fullscreen TUI drags the title and resize grip, and the overlay
   }
 });
 
+test("BTW's title buttons keep the draft, scroll position, and owned overlay across size changes", async () => {
+  const h = harness("fullscreen");
+  const ready = Promise.withResolvers<BtwTranscriptPager>();
+  let signal: AbortSignal | undefined;
+  let disposals = 0;
+  const running = runBtwFloating(h.ctx, async (ctx) => {
+    signal = ctx.signal;
+    await ctx.ui.custom<TranscriptPagerAction>((tui, theme, keys, done) => {
+      const turns = Array.from({ length: 24 }, (_, index) => ({
+        kind: "answered" as const,
+        question: `Q${index}`,
+        answer: `A${index}`,
+        response: response(`A${index}`),
+      }));
+      const pager = new BtwTranscriptPager(tui, theme, turns, done, { keybindings: keys, initialQuestion: "draft" });
+      const dispose = pager.dispose.bind(pager);
+      pager.dispose = () => {
+        disposals++;
+        dispose();
+      };
+      queueMicrotask(() => ready.resolve(pager));
+      return pager;
+    });
+  });
+  const header = () => stripVTControlCharacters(h.host.render(h.bounds().width)[0] ?? "");
+  const click = (icon: string) => {
+    const { col, row } = h.bounds();
+    const x = header().lastIndexOf(icon);
+    assert.ok(x >= 0, `Expected ${icon} in the window title`);
+    h.terminal.input(`${ESC}[<0;${col + x + 1};${row + 1}M`);
+    h.terminal.input(`${ESC}[<0;${col + x + 1};${row + 1}m`);
+  };
+  try {
+    const page = await ready.promise;
+    const normal = h.bounds();
+    assert.match(header(), / − {2}□ {2}× ╮$/u);
+    h.terminal.input(`${ESC}[6~`);
+    const scrollTop = page.getPrimaryScrollView().scrollTop;
+    assert.ok(scrollTop > 0);
+    h.terminal.input(F10);
+    assert.equal(page.focused, false);
+    click("−");
+    const minimized = { col: 18, row: 29, width: 64, height: 1 };
+    assert.deepEqual(h.bounds(), minimized);
+    assert.equal(h.host.render(64).length, 1);
+    assert.doesNotMatch(header(), /draft|□/u);
+    assert.equal(page.focused, false);
+    assert.equal(h.parent.getFocusedComponent(), h.host);
+    h.terminal.input("x");
+    click("+");
+    assert.deepEqual(h.bounds(), normal);
+    assert.equal(page.focused, true);
+    assert.equal(page.getPrimaryScrollView().scrollTop, scrollTop);
+    const restored = stripVTControlCharacters(h.host.render(normal.width).join("\n"));
+    assert.match(restored, /draft/);
+    assert.doesNotMatch(restored, /draftx/);
+    click("□");
+    const maximized = { col: 0, row: 0, width: 100, height: 30 };
+    assert.deepEqual(h.bounds(), maximized);
+    assert.equal(page.focused, true);
+    click("−");
+    assert.deepEqual(h.bounds(), minimized);
+    click("+");
+    assert.deepEqual(h.bounds(), maximized);
+    click("❐");
+    assert.deepEqual(h.bounds(), normal);
+    const sibling = h.parent.showOverlay(
+      { render: () => ["Unrelated"], invalidate() {} },
+      { col: 0, row: 0, width: 9 },
+    );
+    click("×");
+    await running;
+    assert.equal(sibling.isFocused(), true);
+    sibling.hide();
+    assert.equal(signal?.aborted, true);
+    assert.deepEqual([h.opens, h.closes, disposals], [1, 1, 1]);
+    assert.equal(h.ctx.ui.getEditorText(), "main draft");
+  } finally {
+    h.dispose();
+    await running;
+  }
+});
+
+test.for([
+  { mode: "regular", submit: "f4", search: "f5" },
+  { mode: "fullscreen", submit: "f5", search: "f4" },
+] as const)(
+  "floating BTW in $mode picks reachable size keys before showing hints",
+  async ({ mode, submit, search }) => {
+    const keys = new KeybindingsManager(TUI_KEYBINDINGS, {
+      "tui.input.submit": submit,
+      "tui.altScreen.search": search,
+      "tui.select.cancel": "ctrl+g",
+    });
+    const h = harness(mode, keys);
+    const ready = Promise.withResolvers<void>();
+    const received: string[] = [];
+    const running = runBtwFloating(h.ctx, async (ctx) =>
+      ctx.ui.custom(() => {
+        queueMicrotask(() => ready.resolve());
+        return { render: () => [], invalidate() {}, handleInput: (input) => received.push(input) };
+      }),
+    );
+    try {
+      await ready.promise;
+      const header = stripVTControlCharacters(h.host.render(h.bounds().width)[0] ?? "");
+      assert.match(header, /F3 minimize · F2 maximize/i);
+      const submitInput = submit === "f4" ? F4 : F5;
+      h.terminal.input(submitInput);
+      assert.deepEqual(received, [submitInput]);
+      h.terminal.input(`${ESC}[12~`);
+      assert.equal(h.bounds().height, 30);
+      h.terminal.input(`${ESC}[13~`);
+      assert.equal(h.bounds().height, 1);
+      h.terminal.input("m");
+      assert.deepEqual(received, [submitInput]);
+      h.terminal.input(`${ESC}[13~`);
+      assert.equal(h.bounds().height, 30);
+      h.terminal.input(`${ESC}[12~`);
+      assert.equal(h.bounds().height, 21);
+      h.terminal.input(`${ESC}[13~`);
+      h.terminal.input("\u0007");
+      await running;
+      assert.equal(h.closes, 1);
+    } finally {
+      h.dispose();
+      await running;
+    }
+  },
+);
+
 for (const stop of ["shutdown", "disposed"] as const) {
   test(`floating ${stop} closes once and disposes an asynchronously created page`, async () => {
     const h = harness("regular");
@@ -328,8 +461,10 @@ test("floating geometry shortcuts do not consume pasted input", () => {
     const frame = new BtwFloatingFrame(h.parent, theme, getKeybindings(), () => assert.fail("pasted hard cancel"));
     const passed: string[] = [];
     frame.setPage({ render: () => [], invalidate() {}, handleInput: (data) => passed.push(data) });
-    for (const part of [`${ESC}[200~`, F10, CTRL_C, `${ESC}[201~`]) frame.handleInput(part);
-    assert.deepEqual(passed, [`${ESC}[200~`, F10, CTRL_C, `${ESC}[201~`]);
+    const paste = [`${ESC}[200~`, F10, F4, F5, CTRL_C, `${ESC}[201~`];
+    for (const part of paste) frame.handleInput(part);
+    assert.deepEqual(passed, paste);
+    assert.equal(frame.overlayOptions.maxHeight, 21);
   } finally {
     h.dispose();
   }

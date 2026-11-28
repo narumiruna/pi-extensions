@@ -3,6 +3,7 @@ import {
   type Component,
   type Focusable,
   isFocusable,
+  isKeyRepeat,
   isKittyProtocolActive,
   type KeybindingsManager,
   type KeyId,
@@ -12,6 +13,7 @@ import {
   type TUI,
   type TuiMouseEvent,
   type TuiMouseEventResult,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
 import { FloatingFrame } from "@narumitw/pi-tui-kit/floating-frame";
 import {
@@ -30,7 +32,8 @@ export type FloatingPage = Component & { dispose?(): void; getPrimaryScrollView?
 const MIN_WIDTH = 32;
 const MIN_HEIGHT = 9;
 const PAGE_RESERVED_APP_ROWS = 3;
-const WINDOW_KEYS = ["f9", "f10", "f11", "f12"] as const;
+const MOVE_KEYS = ["f9", "f10", "f11", "f12"] as const;
+const SIZE_KEYS = ["f4", "f5", "f3", "f2"] as const;
 const DIRECTION_SETS = [
   { keys: ["left", "right", "up", "down"], label: "Arrows" },
   { keys: ["a", "d", "w", "s"], label: "WASD" },
@@ -56,7 +59,9 @@ export class BtwFloatingFrame implements Component, Focusable {
   private readonly pasteGuard = new BtwPasteGuard();
   private readonly shortcutBlockers: string[];
   private readonly directionBlockers: string[];
-  private chosenKeys: { kitty: boolean; key?: KeyId; directions?: (typeof DIRECTION_SETS)[number] } | undefined;
+  private chosenKeys:
+    | { kitty: boolean; move?: KeyId; directions?: (typeof DIRECTION_SETS)[number]; minimize?: KeyId; maximize?: KeyId }
+    | undefined;
 
   constructor(
     private readonly parent: TUI,
@@ -76,8 +81,13 @@ export class BtwFloatingFrame implements Component, Focusable {
       requestRender: () => parent.requestRender(),
       styleBorder: (line) => theme.fg("border", line),
       styleTitle: (line) => theme.fg("muted", line),
-      title: () => this.renderTitle(),
+      title: (columns) => this.renderTitle(columns),
       focusOnDrag: true,
+      controls: {
+        close: hardCancel,
+        enabled: (action) => parent.mode === "fullscreen" || this.windowKeys[action] !== undefined,
+        styleButton: (text) => theme.fg("text", text),
+      },
       body: {
         render: ({ columns }) => this.page?.render(columns) ?? [theme.fg("muted", "Opening BTW…")],
         invalidate: () => this.page?.invalidate(),
@@ -140,28 +150,55 @@ export class BtwFloatingFrame implements Component, Focusable {
     return this.frame.render(width);
   }
 
-  private renderTitle(): string {
-    const { key, directions } = this.windowKeys;
-    const hint =
-      this.adjusting && directions
-        ? `${directions.label} move · Shift resize`
-        : key
-          ? `${formatKeyLabel(key)} move/resize`
-          : "";
-    return hint ? ` BTW · ${hint} ` : " BTW ";
+  private renderTitle(columns: number): string {
+    const { move, directions, minimize, maximize } = this.windowKeys;
+    const mode = this.frame.mode;
+    const hints =
+      mode === "minimized"
+        ? [keyHint(minimize, "restore"), "Ctrl+C close"]
+        : [
+            mode === "normal" &&
+              (this.adjusting && directions ? `${directions.label} move · Shift resize` : keyHint(move, "move/resize")),
+            keyHint(minimize, "minimize"),
+            keyHint(maximize, mode === "maximized" ? "restore size" : "maximize"),
+          ];
+    let title = " BTW";
+    for (const hint of hints) {
+      if (!hint) continue;
+      const next = `${title} · ${hint}`;
+      if (visibleWidth(next) <= columns) title = next;
+    }
+    return title;
   }
 
   handleInput(data: string): void {
+    const mode = this.frame.mode;
     if (this.pasteGuard.consume(data)) {
-      if (!this.adjusting) this.page?.handleInput?.(data);
+      if (mode !== "minimized" && !this.adjusting) this.page?.handleInput?.(data);
       return;
     }
-    if (matchesKey(data, "ctrl+c") || (!this.adjusting && getBtwShortcuts(this.tui).matches(data, "exit"))) {
+    if (
+      matchesKey(data, "ctrl+c") ||
+      (!this.adjusting && getBtwShortcuts(this.tui).matches(data, "exit")) ||
+      (mode === "minimized" && this.keybindings.matches(data, "tui.select.cancel"))
+    ) {
       this.hardCancel();
       return;
     }
-    const { key, directions } = this.windowKeys;
-    if (key && matchesKey(data, key)) {
+    const { move, directions, minimize, maximize } = this.windowKeys;
+    if (minimize && matchesKey(data, minimize)) {
+      if (!isKeyRepeat(data)) {
+        if (this.adjusting) this.setAdjusting(false);
+        this.frame.toggleMinimized();
+      }
+    } else if (mode === "minimized") {
+      return;
+    } else if (maximize && matchesKey(data, maximize)) {
+      if (!isKeyRepeat(data)) {
+        if (this.adjusting) this.setAdjusting(false);
+        this.frame.toggleMaximized();
+      }
+    } else if (mode === "normal" && move && matchesKey(data, move)) {
       this.setAdjusting(!this.adjusting);
     } else if (this.adjusting && directions) {
       if (
@@ -187,7 +224,10 @@ export class BtwFloatingFrame implements Component, Focusable {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    return this.frame.handleMouse(event);
+    const mode = this.frame.mode;
+    const result = this.frame.handleMouse(event);
+    if (this.adjusting && mode !== this.frame.mode) this.setAdjusting(false);
+    return result;
   }
 
   private handleBodyMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
@@ -211,8 +251,9 @@ export class BtwFloatingFrame implements Component, Focusable {
         ),
       );
       const blockers = [...this.shortcutBlockers, ...Object.values(getBtwShortcuts(this.tui).keys).flat()];
-      const key = directions && WINDOW_KEYS.find((key) => btwKeyHasReachableInput(key, blockers));
-      this.chosenKeys = { kitty, key, directions };
+      const move = directions && MOVE_KEYS.find((key) => btwKeyHasReachableInput(key, blockers));
+      const [minimize, maximize] = SIZE_KEYS.filter((key) => btwKeyHasReachableInput(key, blockers));
+      this.chosenKeys = { kitty, move, directions, minimize, maximize };
     }
     return this.chosenKeys;
   }
@@ -222,6 +263,10 @@ export class BtwFloatingFrame implements Component, Focusable {
     this.focused = this.frame.focused;
     this.parent.requestRender();
   }
+}
+
+function keyHint(key: KeyId | undefined, action: string): string | undefined {
+  return key && `${formatKeyLabel(key)} ${action}`;
 }
 
 function boundProperty<T extends object>(target: T, property: string | symbol): unknown {

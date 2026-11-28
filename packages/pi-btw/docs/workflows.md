@@ -102,14 +102,17 @@ Click it or use Pi's effective `tui.altScreen.bottom` binding (`Ctrl+End` by def
 
 ## Floating window
 
-Select **Floating** under **Side-thread layout**. Pi draws BTW over the main conversation without changing terminal modes. The editor and its key hints stay at the bottom as the window resizes, leaving space for the transcript above. Close BTW to use the main editor again.
+Select **Floating** under **Side-thread layout**. Pi draws BTW over the main conversation without changing terminal modes. In Pi's fullscreen mode, click the controls in the top-right corner:
 
-1. Press the function key shown in the window title (usually **F10**).
-2. Use the arrow keys to move the window and **Shift+arrow** to change its width or height. Follow the title if it shows alternate controls.
-3. Press **Escape** or the same function key to return to the composer without closing the window.
+| Button | Action |
+| --- | --- |
+| `−` / `+` | Minimize to a one-line bar at the bottom, or restore the previous size. BTW keeps keyboard focus and preserves your draft. |
+| `□` / `❐` | Fill the terminal, or restore the previous window size and position. |
+| `×` | Close the BTW window, just like **Ctrl+C**. |
 
-In Pi's fullscreen mode, you can also drag the title bar to move the window or drag its bottom-right corner to resize it. Pi's regular mode leaves mouse input to the terminal, so use the keyboard there.
-The position and size stay in effect across screens until you close the window. Reopening starts centered. The window stays within the terminal when it shrinks.
+The title shows keyboard shortcuts for minimizing and maximizing (usually **F4** and **F5**). Use them in either Pi mode; regular mode does not send mouse clicks to the window. The keys can change if they conflict with other bindings, and a narrow window may hide some hints or buttons.
+
+To move or resize the normal-sized window, drag the title text or any edge in fullscreen mode. With the keyboard, press the move/resize key shown in the title (usually **F10**), then use the arrow keys to move or **Shift+arrow** to resize. Press **Escape** or the same function key to finish adjusting. The window stays within the terminal and remembers its size and position across BTW screens. Reopening starts centered.
 
 Use Pi's paging keys to scroll the side transcript, or the mouse wheel over the window in fullscreen mode. Use a dedicated fullscreen or split layout for BTW transcript search and BTW's mouse selection and copy controls.
 
