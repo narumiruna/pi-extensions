@@ -1,5 +1,12 @@
 # @narumitw/pi-analytics
 
+## 0.50.4
+
+### Patch Changes
+
+- Updated dependencies [3cbbbc5]
+  - @narumitw/pi-tui-kit@0.73.0
+
 ## 0.50.3
 
 ### Patch Changes

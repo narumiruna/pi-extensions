@@ -1,5 +1,12 @@
 # @narumitw/pi-fleet
 
+## 0.3.13
+
+### Patch Changes
+
+- Updated dependencies [3cbbbc5]
+  - @narumitw/pi-tui-kit@0.73.0
+
 ## 0.3.12
 
 ### Patch Changes

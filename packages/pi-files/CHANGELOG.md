@@ -1,5 +1,12 @@
 # @narumitw/pi-files
 
+## 0.3.2
+
+### Patch Changes
+
+- Updated dependencies [3cbbbc5]
+  - @narumitw/pi-tui-kit@0.73.0
+
 ## 0.3.1
 
 ### Patch Changes

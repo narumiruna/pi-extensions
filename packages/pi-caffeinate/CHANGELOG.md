@@ -1,5 +1,12 @@
 # @narumitw/pi-caffeinate
 
+## 0.49.18
+
+### Patch Changes
+
+- Updated dependencies [3cbbbc5]
+  - @narumitw/pi-tui-kit@0.73.0
+
 ## 0.49.17
 
 ### Patch Changes

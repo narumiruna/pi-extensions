@@ -1,5 +1,11 @@
 # @narumitw/pi-tui-kit
 
+## 0.73.0
+
+### Minor Changes
+
+- 3cbbbc5: Resize `FloatingFrame` from all four edges and corners in Pi fullscreen mode. Drag the title text to move the window and the top border to resize it. The existing bottom-right grip and keyboard resize API remain supported.
+
 ## 0.72.0
 
 ### Minor Changes
