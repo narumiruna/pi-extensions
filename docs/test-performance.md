@@ -33,10 +33,10 @@ once if there is work to run. The selection includes root integration tests and 
 plus their local consumers. Shared test inputs or an unusable base select the full suite. Changes
 that do not affect tests skip compilation, the artifact, and the test jobs.
 
-`test-root` and the package matrix run in parallel. Each runner installs the lockfile dependencies
-and restores the same run's package build output and compiled test support before running
-`npm test -- --ci-shard <root|package-directory>`. The runner does not rebuild or recompile tests
-in a shard, and the two Vitest isolation projects retain their existing membership for that shard.
+`test-root` and the package matrix run in parallel. Each runner installs the lockfile dependencies,
+then replaces generated outputs with the same run's archived build output and compiled test support.
+This removes files created only by npm's `prepare` hook. `npm test -- --ci-shard <root|package-directory>`
+runs Vitest without rebuilding or recompiling. The projects retain their existing isolation rules.
 The required check named `ci` passes only when `check` and every selected test job pass. It accepts
 skips only when no work was selected for that job. If the shared artifact has expired, rerun all
 jobs so `check` can recreate it.

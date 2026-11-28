@@ -92,7 +92,8 @@ jobs:
           merge-multiple: true
       - &restore
         name: Restore test inputs
-        run: tar -xzf "$RUNNER_TEMP/ci-test-inputs.tar.gz"
+        # Replace generated directories; npm ci's prepare hook can leave files not in the archive.
+        run: tar -xzf "$RUNNER_TEMP/ci-test-inputs.tar.gz" --recursive-unlink
       - name: Run root tests
         run: npm test -- --ci-shard root
 

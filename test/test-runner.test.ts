@@ -441,7 +441,41 @@ test("CI compiles only after the separate successful check gate", () => {
   assert.doesNotMatch(workflow, /continue-on-error/u);
 });
 
-test.skipIf(process.platform === "win32")("required CI check rejects failures and unplanned skips", () => {
+test.skipIf(process.platform !== "linux")(
+  "CI artifact restore replaces prepare outputs without deleting siblings",
+  () => {
+    const workflow = readFileSync(path.join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
+    const restore = workflow.split("      - &restore\n")[1]?.split("\n      - ")[0];
+    const command = restore?.match(/^ {8}run: (.+)$/mu)?.[1];
+    assert.ok(command);
+
+    const dist = path.join(root, "packages/pi-base/dist");
+    const executable = path.join(dist, "cli.js");
+    const buildId = path.join(dist, ".build-id");
+    const leftover = path.join(dist, "install-only.js.map");
+    const sibling = path.join(dist, "../package.json");
+    mkdirSync(dist, { recursive: true });
+    writeFileSync(executable, "built", { mode: 0o755 });
+    writeFileSync(buildId, "build ID");
+    execFileSync("tar", ["-czf", path.join(root, "ci-test-inputs.tar.gz"), "--", "packages/pi-base/dist"], {
+      cwd: root,
+    });
+    rmSync(dist, { recursive: true });
+    mkdirSync(dist);
+    writeFileSync(executable, "prepared", { mode: 0o644 });
+    writeFileSync(leftover, "prepare-only output");
+    writeFileSync(sibling, "manifest");
+
+    execFileSync("bash", ["-e", "-c", command], { cwd: root, env: { ...process.env, RUNNER_TEMP: root } });
+    assert.equal(readFileSync(executable, "utf8"), "built");
+    assert.ok(fs.statSync(executable).mode & 0o111);
+    assert.equal(readFileSync(buildId, "utf8"), "build ID");
+    assert.equal(existsSync(leftover), false);
+    assert.equal(readFileSync(sibling, "utf8"), "manifest");
+  },
+);
+
+test.skipIf(process.platform === "win32")("required CI check rejects failures and unexpected skips", () => {
   const workflow = readFileSync(path.join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
   const gate = workflow.slice(workflow.indexOf("\n  ci:\n"));
   assert.match(gate, /name: ci\n {4}needs: \[check, test-root, test-package\]\n {4}if: always\(\)/u);
