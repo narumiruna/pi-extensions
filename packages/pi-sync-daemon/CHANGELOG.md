@@ -1,5 +1,11 @@
 # @narumitw/pi-sync-daemon
 
+## 0.16.0
+
+### Minor Changes
+
+- 802416f: Show changed files in a searchable Pi Sync TUI list and load a read-only diff for the selected file. Use Kit's optional floating document review where it fits and the inline review on smaller terminals. The daemon bounds and isolates previews by client and keeps the existing RPC summary operation unchanged.
+
 ## 0.15.1
 
 ### Patch Changes

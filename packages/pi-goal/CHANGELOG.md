@@ -1,5 +1,12 @@
 # @narumitw/pi-goal
 
+## 0.55.10
+
+### Patch Changes
+
+- Updated dependencies [802416f]
+  - @narumitw/pi-tui-kit@0.74.0
+
 ## 0.55.9
 
 ### Patch Changes

@@ -1,5 +1,12 @@
 # @narumitw/pi-illustrate
 
+## 0.2.5
+
+### Patch Changes
+
+- Updated dependencies [802416f]
+  - @narumitw/pi-tui-kit@0.74.0
+
 ## 0.2.4
 
 ### Patch Changes
